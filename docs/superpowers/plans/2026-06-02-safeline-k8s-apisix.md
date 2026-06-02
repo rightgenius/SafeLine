@@ -878,15 +878,21 @@ In the "不要做的事" section, append a new bullet:
 
 (Insert it as the last bullet of the existing list.)
 
-- [ ] **Step 4: Add one row to the compose vs k8s table in section 14**
+- [ ] **Step 4: Update the compose vs k8s table in section 14**
 
-The table currently has a "数据面" row. Add a new row directly below it:
+The table currently has a "数据面" row showing ingress-nginx + t1k as the current k8s data plane. With the new APISIX path, this is no longer true. Update the existing "数据面" row and add a new "WAF 插件" row directly below it. Both rows should mirror the dual-status phrasing used in the section 9 heading.
 
-```markdown
-| WAF 插件 | ingress-nginx t1k（已弃用） | APISIX 内置 chaitin-waf |
+Replace the existing "数据面" row's k8s column (`ingress-nginx + t1k`) with:
+```
+APISIX（推荐） / ingress-nginx + t1k（已弃用）
 ```
 
-(For context, the existing "数据面" row reads: `| 数据面 | safeline-tengine | ingress-nginx + t1k |`. The new row goes immediately after.)
+Then add the new row directly below it:
+```markdown
+| WAF 插件 | lua-resty-t1k（safeline-tengine 内置） | APISIX chaitin-waf（推荐） / ingress-nginx t1k（已弃用） |
+```
+
+Note: `compose.yaml` does not use `ingress-nginx` (it uses `safeline-tengine` with `lua-resty-t1k` baked in, per AGENTS.md), so the compose column for the WAF row references `lua-resty-t1k` rather than `ingress-nginx t1k`.
 
 - [ ] **Step 5: Verify the edits**
 
@@ -896,6 +902,7 @@ grep -c "k8s/apisix-controller/README.md" k8s/README.md   # expect >= 1 (the cro
 grep -c "mgt 控制台" k8s/README.md                         # expect >= 2 (one in section 4 / 9, one in the new section 13 item)
 grep -c "WAF 插件" k8s/README.md                           # expect >= 1 (the new table row in section 14)
 grep -c "chaitin-waf" k8s/README.md                        # expect >= 2 (one in the deprecation banner, one in the new table row)
+grep -c "ingress-nginx t1k" k8s/README.md                 # expect >= 1 (the deprecation markers in section 9 banner and the table)
 ```
 Expected: each grep returns 1 or more. If any returns 0, re-check the surrounding edit in steps 2-4.
 
