@@ -132,6 +132,10 @@ AI agents: mcp_server (5678) ──HTTPS+token──→ mgt-api REST :1443
 - `yanshi`'s `lexer.{cc,hh}` and `parser.{cc,hh}` are gitignored; don't commit them after `make`. If they appear in a working tree, run `make distclean`.
 - The mgt-api container listens on `1443` inside the compose network; the host port is `${MGT_PORT:-9443}`. The Tengine container uses `network_mode: host`, not the `safeline-ce` bridge — don't move it onto the bridge network.
 - The detector defaults to a unix socket (`/resources/detector/snserver.sock`). The Lua plugins document how to switch the detector to TCP/8000 (edit `detector.yml` and expose the port) before they can talk to it.
+- APISIX chart pinning: the `apisix/apisix` helm chart at `--version 2.14.1` ships `apache/apisix:3.16.0`. The earlier `--version 0.16.0` floating around in older plan drafts is the chart's *internal* `appVersion`, not the chart version — passing it to `helm install` errors out. Always read `helm search repo apisix/apisix --versions` to confirm before pinning.
+- The umbrella `apisix/apisix` chart does NOT include `apisix-ingress-controller`. Install it as a separate release: `helm install apisix-ingress-controller apisix/apisix-ingress-controller --version 1.2.0 --set config.apisix.serviceNamespace=ingress-apisix`. The controller chart is GitHub-releases-only (NOT in the helm repo), and `github.com/.../releases/download/` is often unreachable from build networks — mirror it to a private repo in real deployments.
+- chaitin-waf plugin metadata: the chart's `pluginAttrs` writes to `plugin_attr` in the static `config.yaml`, which the chaitin-waf plugin does NOT read. The plugin reads its cluster-wide metadata from etcd at `/apisix/admin/plugin_metadata/chaitin-waf`. After `helm install`, POST the seed JSON to the Admin API. See `k8s/apisix-controller/waf-plugin-metadata.json` and README quick-start step 3. Without it, every request to a chaitin-waf-enabled route returns HTTP 500 + `X-APISIX-CHAITIN-WAF: err` (verified on chart 2.14.1 + APISIX 3.16.0).
+- The bundled `bitnami/etcd` chart writes its `rootPassword` into the rendered manifest verbatim (not a Secret-backed value). The APISIX admin key is also visible in the rendered `apisix-admin` Secret in plaintext. Both are fine for lab clusters; production must override via an external Secret or move etcd out of the chart.
 - License is `LICENSE.md` (custom, not stock MIT/Apache). Keep copyright headers consistent.
 - `.github/ISSUE_TEMPLATE/config.yml` disables blank issues and links to the Discord and the CT Stack bypass reporting form. New issues must use one of the templates in `.github/ISSUE_TEMPLATE/`.
 
@@ -149,8 +153,41 @@ Consequences in this repo:
 
 What that means for new work:
 - Don't add features to `sdk/ingress-nginx/`.
-- `k8s/apisix-controller/` is the new home for k8s data-plane work. It uses the **official first-party `chaitin-waf` plugin** from the APISIX plugin hub (https://apisix.apache.org/docs/apisix/plugins/chaitin-waf/) — no custom controller image and no custom Lua plugin build needed. Wires up via the `apisix` and `apisix-ingress-controller` Helm charts; WAF plugin metadata (node list, cluster-wide defaults) is set via `plugin_attr` in chart values, and per-Ingress opt-in is via the `ApisixPlugin` CRD. The design rationale is in `docs/superpowers/specs/2026-06-02-safeline-k8s-apisix-design.md`.
+- `k8s/apisix-controller/` is the new home for k8s data-plane work. It uses the **official first-party `chaitin-waf` plugin** from the APISIX plugin hub (https://apisix.apache.org/docs/apisix/plugins/chaitin-waf/) — no custom controller image and no custom Lua plugin build needed. Wires up via the `apisix` and `apisix-ingress-controller` Helm charts; WAF plugin metadata (node list, cluster-wide defaults) is seeded into etcd via the Admin API after `helm install` (see "Common gotchas" — `pluginAttrs` in chart values is **not** the right hook), and per-Ingress opt-in is via the `ApisixPlugin` CRD. The design rationale is in `docs/superpowers/specs/2026-06-02-safeline-k8s-apisix-design.md`.
 - `sdk/lua-resty-t1k/` is the long-term portable core. Any data plane that supports OpenResty/Lua (APISIX, Kong, OpenResty sidecar) can consume it. APISIX's `chaitin-waf` plugin uses it under the hood.
 - `sdk/kong/` and `sdk/traefik-safeline/` are still maintained upstream — keep them as alternatives; don't deprecate them.
+
+### Validation status
+
+APISIX + chaitin-waf was tested in three tiers. Tier 1 is committed (verifies the install + plugin wiring); Tier 2 and Tier 3 are unverified — anyone touching the data plane should run them.
+
+**Tier 1 — DONE (commit `3a75ef8`).** Verified on OrbStack k8s (1 node, `local-path` SC, default StorageClass), APISIX 3.16.0 + helm chart 2.14.1 + bundled etcd. Tests run, with results:
+- `helm template` against `helm-values.yaml` renders the WAF plugin config block correctly (after the chart-key fix `set.plugin_attr` → `pluginAttrs`).
+- `helm install apisix apisix/apisix --version 2.14.1` succeeds; pods Ready after image pulls (`apache/apisix:3.16.0` ≈ 480 MB).
+- `chaitin-waf:true` confirmed in the APISIX loaded-plugins list (`/apisix/admin/plugins/list`).
+- Demo nginx app reachable behind a route created via Admin API; route has chaitin-waf plugin enabled.
+- Before seeding `plugin_metadata` in etcd: every request returns HTTP 500 with `X-APISIX-CHAITIN-WAF: err`.
+- After seeding (`PUT /apisix/admin/plugin_metadata/chaitin-waf`): every request returns HTTP 200 with `X-APISIX-CHAITIN-WAF: waf-err` (plugin runs, **fail-opens** because no detector is reachable). The `waf-err` vs `unhealthy` distinction matters: `waf-err` = error talking to the WAF server; `unhealthy` = no WAF service available per plugin metadata. Tier 1 only proves the plugin is wired, not that blocking works.
+
+This run caught two real bugs that are now fixed: (1) chart key is `apisix.pluginAttrs`, not `set.plugin_attr` (chart 2.14.1 silently drops the latter); (2) `pluginAttrs` writes to static `plugin_attr`, which chaitin-waf does not read — metadata must go to etcd.
+
+**Tier 2 — TODO. Mock the detector** to verify real `block` and `monitor` behavior without needing a full SafeLine stack. Approximate recipe:
+- Run a T1K-protocol fake detector on a `ClusterIP` Service in-cluster, on TCP/8000. The protocol is the same `lua-resty-t1k` client speaks (`sdk/lua-resty-t1k/`); the cheapest mock is a netcat listener that consumes the request and replies with `verdict: allow|block|monitor`. Even a "always return allow" listener is enough to flip Tier 1 from `waf-err` to `unhealthy` and prove the plugin is talking to a server.
+- Update `plugin_metadata.chaitin-waf.nodes[0].host` to point at the mock Service, then PUT the metadata to the Admin API.
+- Re-run the Tier 1 curl tests; with the mock reachable, `X-APISIX-CHAITIN-WAF: waf-err` should disappear from the headers (or change to `unhealthy` if the mock accepts but returns no verdict).
+- Test cases that still need to pass against a real `block` verdict (requires a smarter mock that returns `block` for known-bad payloads):
+  - `mode: block` + `?id=1' OR '1'='1` → expect HTTP 403 + JSON block body + `X-APISIX-CHAITIN-WAF: blocked`.
+  - `mode: monitor` + same payload → expect HTTP 200 + payload forwarded to upstream + matching log line in the mock's stdout.
+  - `mode: off` → plugin bypassed, no plugin overhead, no log, no WAF header.
+- Per-route override via `ApisixPlugin` CRD (cluster-wide `monitor`, one Ingress `block`) — revisit once the `apisix-ingress-controller` chart is downloadable; the GitHub-releases tarball timed out from this network so the controller was not installed during Tier 1. Fallback: use Admin API to set per-route plugin config, since `plugin_config_id` references work without the controller.
+
+**Tier 3 — TODO. Full SafeLine stack on k8s.** This is the real validation: deploy detector + mgt + pg + luigi + fvm + chaos from `k8s/README.md` sections 3-8, point `plugin_metadata.chaitin-waf.nodes[0].host` at the detector Service, and re-run Tier 2 against the real detector. Questions Tier 3 must answer:
+- Does the k8s Service-discoverable detector behave the same as the docker-compose unix-socket detector? (Detector Service must be on TCP/8000, not unix socket — see "Common gotchas".)
+- Does APISIX discover all detector replicas, or does it pin to one? The plugin metadata `nodes[]` is static; for HA you'd need an APISIX `upstream` that load-balances across detector pods (or run a headless Service with per-pod entries in `nodes`).
+- Does the mgt control-panel Ingress stay unprotected? The design spec mandates `chaitin-waf` only on user-facing Ingresses. Verify by curling the mgt Ingress with a known-bad payload and confirming it's not blocked.
+- Does the demo-app's `ApisixPlugin` (`monitor` mode) actually surface decisions in the mgt console's "logs" tab? (Requires the controller to translate the CRD into a route plugin config; if the controller chart remains un-downloadable, fall back to Admin API + cross-check logs via `etcdctl get /apisix/admin/routes/...`.)
+- End-to-end migration dry-run: take the `upgrade-from-ingress-nginx.md` playbook, apply it to a cluster with a real ingress-nginx deployment, and verify the same upstream is now fronted by APISIX with the same WAF behavior.
+
+**How to run Tier 2/3 yourself.** OrbStack on macOS works (used for Tier 1). For fresh starts, `helm uninstall apisix -n ingress-apisix && kubectl delete namespace ingress-apisix demo-app` cleans up. The admin key is in the `apisix-admin` Secret (default `edd1c9f034335f136f87ad84b625c8f1` from chart 2.14.1 — override in production). The admin Service is `apisix-admin.ingress-apisix.svc.cluster.local:9180`. Port-forward to `apisix-gateway` (`kubectl -n ingress-apisix port-forward svc/apisix-gateway 9080:80`) if `LoadBalancer` does not get an external IP (OrbStack typically maps it to a NodePort instead).
 </content>
 </invoke>
