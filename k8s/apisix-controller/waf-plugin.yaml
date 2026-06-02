@@ -21,12 +21,12 @@
 # apiVersion: apisix.apache.org/v1alpha1
 # kind: ApisixPlugin
 # metadata:
-#   name: waf-monitor
+#   name: waf-monitor            # <-- change
 #   namespace: my-app            # <-- change
 # spec:
 #   ingressRefs:
-#     - name: my-app-ingress
-#       namespace: my-app        # <-- change
+#     - name: my-app-ingress     # <-- change
+#       namespace: my-app
 #   plugins:
 #     - name: chaitin-waf
 #       enable: true
@@ -41,12 +41,12 @@
 # apiVersion: apisix.apache.org/v1alpha1
 # kind: ApisixPlugin
 # metadata:
-#   name: waf-block
+#   name: waf-block              # <-- change
 #   namespace: my-app            # <-- change
 # spec:
 #   ingressRefs:
-#     - name: my-app-ingress
-#       namespace: my-app        # <-- change
+#     - name: my-app-ingress     # <-- change
+#       namespace: my-app
 #   plugins:
 #     - name: chaitin-waf
 #       enable: true
@@ -61,12 +61,12 @@
 # apiVersion: apisix.apache.org/v1alpha1
 # kind: ApisixPlugin
 # metadata:
-#   name: waf-off
+#   name: waf-off                # <-- change
 #   namespace: my-app            # <-- change
 # spec:
 #   ingressRefs:
-#     - name: my-app-ingress
-#       namespace: my-app        # <-- change
+#     - name: my-app-ingress     # <-- change
+#       namespace: my-app
 #   plugins:
 #     - name: chaitin-waf
 #       enable: false
