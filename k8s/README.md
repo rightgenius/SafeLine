@@ -354,7 +354,21 @@ spec:
         ports: [{ containerPort: 5678 }]
 ```
 
-## 9. ingress-nginx + t1k 插件
+## 9. 数据面：APISIX + chaitin-waf 插件（推荐） / ingress-nginx + t1k 插件（已弃用）
+
+数据面已经从 ingress-nginx 迁移到 Apache APISIX，使用 APISIX 官方插件中心的
+`chaitin-waf` 插件。ingress-nginx 已于 2025-11-11 被 Kubernetes SIG Network
+正式退役（[公告](https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/)），
+最好支持的维护期到 2026-03，之后不会有安全补丁。
+
+**新部署请直接使用 APISIX**：见 [`k8s/apisix-controller/README.md`](apisix-controller/README.md) 完整说明。
+
+**已经在跑 ingress-nginx + t1k 的老部署**：按
+[`k8s/apisix-controller/upgrade-from-ingress-nginx.md`](apisix-controller/upgrade-from-ingress-nginx.md)
+的步骤零停机迁移；本节保留原始 yaml 作为参考，但不再更新。
+
+<details>
+<summary>原始 ingress-nginx + t1k 章节（已弃用）</summary>
 
 ### 9.1 安装 ingress-nginx
 
@@ -481,6 +495,8 @@ spec:
 
 应用 Deployment / Service / 代码**一行都不用改**。
 
+</details>
+
 ## 10. 部署顺序
 
 ```bash
@@ -543,12 +559,14 @@ curl -i "http://app.example.com/?id=1' OR '1'='1"
 - **不要**把 mgt / detector / luigi / fvm / chaos 拆到多个 namespace（DNS 互通简单很多）
 - **不要**把 detector 多副本（v1 设计是单点，多副本会出现规则竞态）
 - **不要**在 t1k 客户端使用默认 `remote_addr`（拿不到真实客户端 IP，限流/封 IP 失效）
+- **不要**在 mgt 控制台 Ingress 上挂 `chaitin-waf` 插件（操作员可能因为 WAF 触发的拒绝被锁在控制台外面）
 
 ## 14. 与 compose 部署的对比
 
 | 项 | compose | k8s |
 | --- | --- | --- |
 | 数据面 | safeline-tengine | ingress-nginx + t1k |
+| WAF 插件 | ingress-nginx t1k（已弃用） | APISIX 内置 chaitin-waf |
 | detector 监听 | unix socket | TCP :8000 |
 | 状态 | 单机 | 多副本（除 detector） |
 | 规则下发 | tcd → nginx reload | mgt-api + ingress-nginx reload |
