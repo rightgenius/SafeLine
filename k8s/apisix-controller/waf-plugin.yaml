@@ -8,8 +8,9 @@
 #      at your Ingress.
 #   4. kubectl apply -f that file.
 #
-# `mode: off` is the "skip WAF for this Ingress" escape hatch, replacing
-# ingress-nginx's `safeline.nginx.org/disable: "true"` annotation.
+# The opt-out template (enable: false) is the "skip WAF for this Ingress"
+# escape hatch, replacing ingress-nginx's
+# `safeline.nginx.org/disable: "true"` annotation.
 #
 # NOTE: per-Ingress plugin config overrides the cluster-wide defaults set
 # in k8s/apisix-controller/helm-values.yaml. If `mode` is omitted here, the
@@ -32,7 +33,7 @@
 #       config:
 #         mode: monitor
 #         append_waf_resp_header: true
-#         append_waf_debug_header: true   # off in production
+#         append_waf_debug_header: true   # set to false when you migrate to block mode (template 2 below)
 #
 # --- Template 2: block mode (active enforcement) ---
 # Use this for production Ingresses that have been clean in monitor mode
@@ -41,11 +42,11 @@
 # kind: ApisixPlugin
 # metadata:
 #   name: waf-block
-#   namespace: my-app
+#   namespace: my-app            # <-- change
 # spec:
 #   ingressRefs:
 #     - name: my-app-ingress
-#       namespace: my-app
+#       namespace: my-app        # <-- change
 #   plugins:
 #     - name: chaitin-waf
 #       enable: true
@@ -61,11 +62,11 @@
 # kind: ApisixPlugin
 # metadata:
 #   name: waf-off
-#   namespace: my-app
+#   namespace: my-app            # <-- change
 # spec:
 #   ingressRefs:
 #     - name: my-app-ingress
-#       namespace: my-app
+#       namespace: my-app        # <-- change
 #   plugins:
 #     - name: chaitin-waf
 #       enable: false
