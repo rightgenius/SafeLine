@@ -1,0 +1,74 @@
+# Recommended values for the apisix + apisix-ingress-controller charts.
+#
+# Install with:
+#   helm repo add apisix https://apache.github.io/apisix-helm-chart
+#   helm repo update
+#   helm install apisix apisix/apisix \
+#     --namespace ingress-apisix --create-namespace \
+#     -f k8s/apisix-controller/helm-values.yaml
+#
+# Pinned versions (bump in lockstep with version.json):
+#   apache/apisix:3.16.0
+#   apache/apisix-ingress-controller:1.10.0
+#   bitnami/etcd:3.5
+#
+# The chaitin-waf plugin is built into apache/apisix:3.16.0 and is enabled
+# by default in the chart. The plugin metadata (WAF node list, cluster-wide
+# defaults) lives below in `apisix.set.plugin_attr.chaitin-waf`. The exact
+# chart key was `set.plugin_attr` in chart v2.x; later versions may rename
+# to `pluginAttr`. If helm template rejects the key, check the chart
+# version pinned by `apisix.image.tag` and consult the chart's values.yaml.
+
+apisix:
+  replicaCount: 2
+  image:
+    repository: apache/apisix
+    tag: 3.16.0
+  service:
+    type: LoadBalancer
+  set:
+    plugin_attr:
+      chaitin-waf:
+        # Required: where to find the detector. Update if you rename
+        # safeline-detect or move it to a different namespace.
+        nodes:
+          - host: safeline-detect.safeline-ce.svc.cluster.local
+            port: 8000
+        # Cluster-wide default mode. New接入 always start with "monitor",
+        # run for >= 48 hours with no false positives, then flip to "block"
+        # either by editing this value (cluster-wide) or by overriding per
+        # route in an ApisixPlugin CRD.
+        mode: monitor
+        config:
+          connect_timeout: 1000
+          send_timeout: 1000
+          read_timeout: 1000
+          req_body_size: 1024
+          keepalive_size: 256
+          keepalive_timeout: 60000
+          # Critical: must be true so the plugin reads the real client IP
+          # from X-Forwarded-For. If false, downstream IP-based rules see
+          # the LB / NodePort IP and限流 / 封 IP features are useless.
+          real_client_ip: true
+    # APISIX must trust the LB's X-Forwarded-For. Replace the CIDR with
+    # the LB's source range (MetalLB default, your cloud LB's egress CIDR,
+    # or the NodePort range for bare-metal). Comma-separated list.
+    # Key name in chart v2.x is below; if `helm template` rejects it,
+    # consult the chart's values.yaml for the current key.
+    nginx_upstream_trusted_addresses: "10.0.0.0/8,192.168.0.0/16"
+
+etcd:
+  replicaCount: 3
+  auth:
+    rbac:
+      # Replace with a Secret-backed value in production:
+      #   rootPassword: <from secret>
+      rootPassword: changeme-etcd-root
+
+# If using the standalone apisix-ingress-controller chart (not the
+# umbrella chart), uncomment and apply separately:
+# apisix-ingress-controller:
+#   enabled: true
+#   config:
+#     apisix:
+#       serviceNamespace: ingress-apisix
