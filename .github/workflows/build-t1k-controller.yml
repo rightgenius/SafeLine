@@ -1,0 +1,121 @@
+name: Build SafeLine t1k Controller
+
+# 在 GHA 海外 runner 上源码构建 ingress-nginx controller 镜像 + 预装
+# SafeLine safeline 插件，推到阿里云 ACR。
+#
+# 触发方式：
+#   1. 手动（Actions 页面 → Run workflow）：可以选 upstream tag 和 image tag
+#   2. 推 main 分支：自动用默认 tag 重建
+#
+# 前置：Settings → Secrets and variables → Actions 配好下面 4 个 secret
+#   ALIYUN_REGISTRY    例如 registry.cn-hangzhou.aliyuncs.com
+#   ALIYUN_NAMESPACE   例如 hehealth
+#   ALIYUN_USERNAME    阿里云账号邮箱
+#   ALIYUN_PASSWORD    ACR 访问凭证密码（不是阿里云主账号密码）
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "ingress-nginx controller tag（例 controller-v1.15.1）"
+        default: "controller-v1.15.1"
+        type: string
+      image_tag:
+        description: "输出镜像 tag（留空 = 跟 upstream_tag 一样）"
+        default: ""
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - "k8s/t1k-controller/Dockerfile"
+      - "k8s/t1k-controller/build.sh"
+      - "sdk/ingress-nginx/**"
+      - ".github/workflows/build-t1k-controller.yml"
+
+env:
+  IMAGE_NAME: safeline-t1k-controller
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve latest rockspec
+        id: rockspec
+        run: |
+          ROCKSPEC=$(ls sdk/ingress-nginx/ingress-nginx-safeline-*-*.rockspec | sort -V | tail -1)
+          if [[ -z "$ROCKSPEC" ]]; then
+            echo "ERROR: no rockspec found in sdk/ingress-nginx/" >&2
+            exit 1
+          fi
+          echo "rockspec=$(basename "$ROCKSPEC")" >> "$GITHUB_OUTPUT"
+          echo "Using rockspec: $(basename "$ROCKSPEC")"
+
+      - name: Resolve build tags
+        id: tags
+        run: |
+          UPSTREAM_TAG="${{ inputs.upstream_tag }}"
+          UPSTREAM_TAG="${UPSTREAM_TAG:-controller-v1.15.1}"
+          IMAGE_TAG="${{ inputs.image_tag }}"
+          IMAGE_TAG="${IMAGE_TAG:-$UPSTREAM_TAG}"
+          echo "upstream=$UPSTREAM_TAG" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          echo "upstream_tag=$UPSTREAM_TAG, image_tag=$IMAGE_TAG"
+
+      - name: Login to Aliyun ACR
+        if: ${{ secrets.ALIYUN_REGISTRY != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ALIYUN_REGISTRY }}
+          username: ${{ secrets.ALIYUN_USERNAME }}
+          password: ${{ secrets.ALIYUN_PASSWORD }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Stage rockspec into build context
+        run: |
+          cp "sdk/ingress-nginx/${{ steps.rockspec.outputs.rockspec }}" k8s/t1k-controller/
+          ls k8s/t1k-controller/
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ./k8s/t1k-controller
+          file: ./k8s/t1k-controller/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ secrets.ALIYUN_REGISTRY != '' }}
+          tags: |
+            ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.image }}
+            ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.upstream }}
+          build-args: |
+            UPSTREAM_TAG=${{ steps.tags.outputs.upstream }}
+            LUAROCKS_SERVER=https://luarocks.cn
+            SAFELINE_ROCKSPEC=${{ steps.rockspec.outputs.rockspec }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Smoke test the built image
+        if: ${{ steps.build.outputs.digest != '' }}
+        run: |
+          IMAGE="${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.image }}"
+          echo "Testing $IMAGE"
+          # 1) nginx config parses
+          docker run --rm --entrypoint nginx "$IMAGE" -t 2>&1 | grep -q "syntax is ok" \
+            || (echo "FAIL: nginx -t did not return 'syntax is ok'" && exit 1)
+          echo "OK: nginx -t"
+          # 2) the safeline plugin symlink exists in the right place
+          docker run --rm --entrypoint ls "$IMAGE" -la /etc/nginx/lua/plugins/safeline \
+            | grep -q "main.lua" \
+            || (echo "FAIL: /etc/nginx/lua/plugins/safeline/main.lua missing" && exit 1)
+          echo "OK: safeline plugin installed"
+          # 3) the t1k lua module can be required
+          docker run --rm --entrypoint lua5.1 "$IMAGE" \
+            -e 'package.path="/usr/local/share/lua/5.1/?.lua;/usr/local/share/lua/5.1/?/init.lua;"..package.path' \
+            -e 'require "resty.t1k"' \
+            -e 'print("t1k: ok")' 2>&1 | grep -q "t1k: ok" \
+            || (echo "FAIL: require 'resty.t1k' raised an error" && exit 1)
+          echo "OK: t1k lua module loadable"

@@ -1,0 +1,64 @@
+# 插件配置 — host / port / mode 等运行时参数
+# 通过 ConfigMapKeyRef 注入到 controller 的 env，controller 内的
+# safeline lua 模块会在 init 阶段读取这些 env。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: safeline-plugin
+  namespace: ingress-nginx
+data:
+  # detector service (k8s Service 名 + namespace + cluster domain)
+  host: "safeline-detect.safeline-ce.svc.cluster.local"
+  port: "8000"
+  # 模式：新接入先用 monitor 跑几天，确认无误报再切 block
+  mode: "monitor"
+  # 拿真实客户端 IP（用 X-Forwarded-For 的第 1 段）
+  # 必填，否则 WAF 看到的是 LB / NodePort 的 IP，限流 / 封 IP 全废
+  remote-addr: "http_x_forwarded_for: 1"
+  # 调优项（按需改）
+  connect-timeout: "1000"
+  send-timeout: "1000"
+  read-timeout: "1000"
+  req-body-size: "1024"
+  keepalive-size: "256"
+  keepalive-timeout: "60000"
+
+---
+# 启用 safeline 插件。controller 启动时会扫 /etc/nginx/lua/plugins/，
+# 把在 ConfigMap 的 `plugins` 字段里点名的插件挂到所有 location。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ingress-nginx-controller
+  namespace: ingress-nginx
+data:
+  plugins: "safeline"
+  # safeline 插件走的是 controller 自己的注解体系，不需要 snippet 注入
+  allow-snippet-annotations: "false"
+  # 真实客户端 IP（配合 SAFELINE_REMOTE_ADDR 一起生效）
+  use-forwarded-headers: "true"
+  compute-full-forwarded-for: "true"
+
+---
+# Deployment patch: 把 SAFELINE_* env 注入到 controller。
+# 用法（二选一）：
+#   1) helm 安装的 controller：把下面 env 段 merge 到 helm release values
+#      （controller.extraEnv 或者 controller.containerSecurityContext 同级的 env 段）
+#   2) 不用 helm：直接 apply 这段 + 你自己写的 Deployment 主体
+env:
+  - name: SAFELINE_HOST
+    valueFrom: { configMapKeyRef: { name: safeline-plugin, key: host } }
+  - name: SAFELINE_PORT
+    valueFrom: { configMapKeyRef: { name: safeline-plugin, key: port } }
+  - name: SAFELINE_MODE
+    valueFrom: { configMapKeyRef: { name: safeline-plugin, key: mode } }
+  - name: SAFELINE_REMOTE_ADDR
+    valueFrom: { configMapKeyRef: { name: safeline-plugin, key: remote-addr } }
+  - name: SAFELINE_CONNECT_TIMEOUT
+    valueFrom: { configMapKeyRef: { name: safeline-plugin, key: connect-timeout } }
+  - name: SAFELINE_SEND_TIMEOUT
+    valueFrom: { configMapKeyRef: { name: safeline-plugin, key: send-timeout } }
+  - name: SAFELINE_READ_TIMEOUT
+    valueFrom: { configMapKeyRef: { name: safeline-plugin, key: read-timeout } }
+  - name: SAFELINE_REQ_BODY_SIZE
+    valueFrom: { configMapKeyRef: { name: safeline-plugin, key: req-body-size } }
