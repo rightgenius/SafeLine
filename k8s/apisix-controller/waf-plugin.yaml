@@ -3,9 +3,8 @@
 # How to use:
 #   1. Pick the block that matches the desired mode (monitor / block / off).
 #   2. Copy it into your app's namespace, into a file of your choice.
-#   3. Edit `metadata.name` to be unique within the namespace, and edit
-#      `spec.ingressRefs[].name` / `spec.ingressRefs[].namespace` to point
-#      at your Ingress.
+#   3. Edit the three marked lines: `metadata.name`, `metadata.namespace`,
+#      and `spec.ingressRefs[0].name`.
 #   4. kubectl apply -f that file.
 #
 # The opt-out template (enable: false) is the "skip WAF for this Ingress"
