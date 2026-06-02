@@ -21,23 +21,38 @@ helm repo add apisix https://apache.github.io/apisix-helm-chart
 helm repo update
 helm install apisix apisix/apisix \
   --namespace ingress-apisix --create-namespace \
-  --version 0.16.0 \
+  --version 2.14.1 \
   -f k8s/apisix-controller/helm-values.yaml
 
 # 2. Wait for pods to be Ready.
 kubectl -n ingress-apisix wait --for=condition=ready pod -l app.kubernetes.io/name=apisix --timeout=300s
 kubectl -n ingress-apisix wait --for=condition=ready pod -l app.kubernetes.io/name=apisix-etcd --timeout=300s
+# The apisix-ingress-controller is a separate chart (the umbrella chart
+# does not include it). Install it after APISIX is up:
+helm install apisix-ingress-controller apisix/apisix-ingress-controller \
+  --namespace ingress-apisix --version 1.2.0 \
+  --set config.apisix.serviceNamespace=ingress-apisix
 kubectl -n ingress-apisix wait --for=condition=ready pod -l app.kubernetes.io/name=apisix-ingress-controller --timeout=300s
 
-# 3. Deploy the demo app to verify the WAF is wired up.
+# 3. **REQUIRED** — POST chaitin-waf plugin metadata to the Admin API.
+#    The chart's `pluginAttrs` writes to `plugin_attr` in the static
+#    config.yaml, but chaitin-waf reads its metadata from etcd
+#    (`/apisix/admin/plugin_metadata/chaitin-waf`). Without this step
+#    the plugin will return HTTP 500 with `X-APISIX-CHAITIN-WAF: err`.
+ADMIN_KEY=$(kubectl -n ingress-apisix get secret apisix-admin -o jsonpath='{.data.admin-key}' | base64 -d; echo)
+curl -X PUT -H "X-API-KEY: $ADMIN_KEY" \
+  -d @k8s/apisix-controller/waf-plugin-metadata.json \
+  http://apisix-admin.ingress-apisix.svc.cluster.local:9180/apisix/admin/plugin_metadata/chaitin-waf
+
+# 4. Deploy the demo app to verify the WAF is wired up.
 kubectl apply -f k8s/apisix-controller/example-app.yaml
 
-# 4. Smoke tests.
+# 5. Smoke tests.
 #    Point demo.example.com at the APISIX LoadBalancer, then:
 curl -i "http://demo.example.com/"            # expect 200 OK
 curl -i "http://demo.example.com/?id=1' OR '1'='1"   # expect 403 + JSON body
 
-# 5. Attach WAF to your real Ingress(es).
+# 6. Attach WAF to your real Ingress(es).
 #    Copy a template, edit it, and apply:
 cp k8s/apisix-controller/waf-plugin.yaml waf-my-app.yaml
 #    Edit waf-my-app.yaml: uncomment the block you want (monitor / block
@@ -50,8 +65,9 @@ kubectl apply -f waf-my-app.yaml
 
 | File | What it is |
 | --- | --- |
-| `helm-values.yaml` | Helm values for the `apisix` and `apisix-ingress-controller` charts. Carries the WAF plugin metadata (node list, cluster-wide defaults). |
-| `waf-plugin.yaml` | `ApisixPlugin` templates for `monitor` / `block` / `off` modes. |
+| `helm-values.yaml` | Helm values for the `apisix` chart. Carries `pluginAttrs` for documentation; the actual chaitin-waf config is posted separately (see step 3 of the quick-start). |
+| `waf-plugin-metadata.json` | Body for the `PUT /apisix/admin/plugin_metadata/chaitin-waf` call (cluster-wide WAF defaults: nodes, mode, timeouts). |
+| `waf-plugin.yaml` | `ApisixPlugin` templates for `monitor` / `block` / `off` modes (per-Ingress override). |
 | `example-app.yaml` | A minimal nginx demo + Ingress + `ApisixPlugin` to verify the WAF. |
 | `upgrade-from-ingress-nginx.md` | Step-by-step migration guide if you are moving off ingress-nginx. |
 

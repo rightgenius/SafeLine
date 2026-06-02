@@ -1,0 +1,19 @@
+{
+  "nodes": [
+    {
+      "host": "safeline-detect.safeline-ce.svc.cluster.local",
+      "port": 8000,
+      "weight": 1
+    }
+  ],
+  "mode": "monitor",
+  "config": {
+    "connect_timeout": 1000,
+    "send_timeout": 1000,
+    "read_timeout": 1000,
+    "req_body_size": 1024,
+    "keepalive_size": 256,
+    "keepalive_timeout": 60000,
+    "real_client_ip": true
+  }
+}

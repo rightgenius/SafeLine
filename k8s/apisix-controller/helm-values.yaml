@@ -5,60 +5,64 @@
 #   helm repo update
 #   helm install apisix apisix/apisix \
 #     --namespace ingress-apisix --create-namespace \
+#     --version 2.14.1 \
 #     -f k8s/apisix-controller/helm-values.yaml
 #
 # Pinned versions (bump in lockstep with version.json):
-#   apache/apisix:3.16.0
-#   apache/apisix-ingress-controller:1.10.0
-#   bitnami/etcd:3.5
+#   apisix helm chart: 2.14.1   (app version: apache/apisix 3.16.0)
+#   apache/apisix-ingress-controller: 1.10.0
+#   bitnami/etcd: 3.5
 #
-# The chaitin-waf plugin is built into apache/apisix:3.16.0 and is enabled
-# by default in the chart. The plugin metadata (WAF node list, cluster-wide
-# defaults) lives below in `apisix.set.plugin_attr.chaitin-waf`. The exact
-# chart key was `set.plugin_attr` in chart v2.x; later versions may rename
-# to `pluginAttr`. If helm template rejects the key, check the chart
-# version pinned by `apisix.image.tag` and consult the chart's values.yaml.
+# IMPORTANT — chaitin-waf plugin metadata:
+# The chart's `pluginAttrs` below writes to `plugin_attr` in the static
+# APISIX config.yaml. The chaitin-waf plugin reads its plugin metadata
+# from etcd at `/apisix/admin/plugin_metadata/chaitin-waf`, NOT from
+# `plugin_attr`. This is a quirk of the chaitin-waf plugin's
+# implementation, not a chart bug. After `helm install`, you must POST
+# the metadata to the Admin API. See the README "Quick start" section
+# for the exact command, and `k8s/apisix-controller/waf-plugin-metadata.json`
+# for a copy-paste-ready body.
+#
+# Without this step, the chaitin-waf plugin will return HTTP 500 on every
+# request with the debug header `X-APISIX-CHAITIN-WAF: err` (verified on
+# APISIX 3.16.0 + chart 2.14.1).
 
 apisix:
-  replicaCount: 2
+  replicaCount: 1   # test cluster is 1-node; raise to 2+ in production
   image:
     repository: apache/apisix
     tag: 3.16.0
   service:
     type: LoadBalancer
-  set:
-    plugin_attr:
-      chaitin-waf:
-        # Required: where to find the detector. Update if you rename
-        # safeline-detect or move it to a different namespace.
-        nodes:
-          - host: safeline-detect.safeline-ce.svc.cluster.local
-            port: 8000
-        # Cluster-wide default mode. New接入 always start with "monitor",
-        # run for >= 48 hours with no false positives, then flip to "block"
-        # either by editing this value (cluster-wide) or by overriding per
-        # route in an ApisixPlugin CRD.
-        mode: monitor
-        config:
-          connect_timeout: 1000
-          send_timeout: 1000
-          read_timeout: 1000
-          req_body_size: 1024
-          keepalive_size: 256
-          keepalive_timeout: 60000
-          # Critical: must be true so the plugin reads the real client IP
-          # from X-Forwarded-For. If false, downstream IP-based rules see
-          # the LB / NodePort IP and限流 / 封 IP features are useless.
-          real_client_ip: true
-    # APISIX must trust the LB's X-Forwarded-For. Replace the CIDR with
-    # the LB's source range (MetalLB default, your cloud LB's egress CIDR,
-    # or the NodePort range for bare-metal). Comma-separated list.
-    # Key name in chart v2.x is below; if `helm template` rejects it,
-    # consult the chart's values.yaml for the current key.
-    nginx_upstream_trusted_addresses: "10.0.0.0/8,192.168.0.0/16"
+  # pluginAttrs → `plugin_attr` in the static APISIX config.yaml.
+  # chaitin-waf does NOT read this — see header comment above.
+  # Kept for documentation and for any future plugin that does read it.
+  pluginAttrs:
+    chaitin-waf:
+      # Where to find the detector. Update if you rename safeline-detect
+      # or move it to a different namespace.
+      nodes:
+        - host: safeline-detect.safeline-ce.svc.cluster.local
+          port: 8000
+      # Cluster-wide default mode. New接入 always start with "monitor",
+      # run for >= 48 hours with no false positives, then flip to "block"
+      # either by editing this value (cluster-wide) or by overriding per
+      # route in an ApisixPlugin CRD.
+      mode: monitor
+      config:
+        connect_timeout: 1000
+        send_timeout: 1000
+        read_timeout: 1000
+        req_body_size: 1024
+        keepalive_size: 256
+        keepalive_timeout: 60000
+        # Critical: must be true so the plugin reads the real client IP
+        # from X-Forwarded-For. If false, downstream IP-based rules see
+        # the LB / NodePort IP and限流 / 封 IP features are useless.
+        real_client_ip: true
 
 etcd:
-  replicaCount: 3
+  replicaCount: 1   # test cluster is 1-node; raise to 3 in production
   auth:
     rbac:
       # Replace with a Secret-backed value in production:
@@ -72,3 +76,4 @@ etcd:
 #   config:
 #     apisix:
 #       serviceNamespace: ingress-apisix
+
