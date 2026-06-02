@@ -634,10 +634,10 @@ Run:
 test -f k8s/apisix-controller/waf-plugin.yaml && echo "OK: waf-plugin.yaml exists"
 test -f k8s/apisix-controller/helm-values.yaml && echo "OK: helm-values.yaml exists"
 test -f k8s/README.md && echo "OK: k8s/README.md exists"
-grep -q "k8s/apisix-controller/helm-values.yaml" k8s/apisix-controller/upgrade-from-ingress-nginx.md && echo "OK: cross-ref to helm-values"
-grep -q "k8s/apisix-controller/waf-plugin.yaml" k8s/apisix-controller/upgrade-from-ingress-nginx.md && echo "OK: cross-ref to waf-plugin"
+grep -q "k8s/apisix-controller/helm-values.yaml" k8s/apisix-controller/upgrade-from-ingress-nginx.md && echo "OK: cross-ref to helm-values (full path)"
+grep -q "waf-plugin.yaml" k8s/apisix-controller/upgrade-from-ingress-nginx.md && echo "OK: cross-ref to waf-plugin (relative)"
 ```
-Expected: 5 `OK:` lines, no errors.
+Expected: 5 `OK:` lines, no errors. (The waf-plugin reference is bare filename because the two files are in the same directory; helm-values reference is full path because it might be referenced from elsewhere later.)
 
 - [ ] **Step 3: Commit**
 
