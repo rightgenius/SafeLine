@@ -565,8 +565,8 @@ curl -i "http://app.example.com/?id=1' OR '1'='1"
 
 | 项 | compose | k8s |
 | --- | --- | --- |
-| 数据面 | safeline-tengine | ingress-nginx + t1k |
-| WAF 插件 | ingress-nginx t1k（已弃用） | APISIX 内置 chaitin-waf |
+| 数据面 | safeline-tengine | APISIX（推荐） / ingress-nginx + t1k（已弃用） |
+| WAF 插件 | lua-resty-t1k（safeline-tengine 内置） | APISIX chaitin-waf（推荐） / ingress-nginx t1k（已弃用） |
 | detector 监听 | unix socket | TCP :8000 |
 | 状态 | 单机 | 多副本（除 detector） |
 | 规则下发 | tcd → nginx reload | mgt-api + ingress-nginx reload |
