@@ -270,23 +270,35 @@ Create `k8s/apisix-controller/waf-plugin.yaml` with three commented-out `ApisixP
 #       enable: false
 ```
 
-- [ ] **Step 2: Verify the file is parseable when all three blocks are uncommented**
+- [ ] **Step 2: Verify the file's contract (presence + no-op-when-applied)**
+
+The three blocks are intentionally commented out — `kubectl apply -f waf-plugin.yaml` is a no-op, users copy the block they want. The verification checks the contract without trying to uncomment in-place (which is fragile because prose lines contain backticked text that looks like YAML).
 
 Run:
 ```bash
 python3 - <<'PY'
-import re, yaml
+import yaml
 text = open('k8s/apisix-controller/waf-plugin.yaml').read()
-# Uncomment all `kind:` / `apiVersion:` / `metadata:` / `spec:` / `plugins:`
-# / `config:` / `ingressRefs:` / `- name:` lines that are currently commented.
-uncommented = re.sub(r'(?m)^#\s?(\S)', r'\1', text)
-docs = [d for d in yaml.safe_load_all(uncommented) if d]
-assert len(docs) == 3, f"expected 3 ApisixPlugin blocks, got {len(docs)}"
-modes = [d['plugins'][0]['config'].get('mode', 'inherit') for d in docs]
-assert modes == ['monitor', 'block', None] or sorted(modes) == sorted(['monitor', 'block', None]), f"unexpected modes: {modes}"
-# the off block has enable:false
-enables = [d['plugins'][0].get('enable', True) for d in docs]
-assert enables[2] is False, f"third block (off) should have enable:false, got {enables[2]}"
+
+# 1. File is all-comments: applying it does nothing.
+docs = [d for d in yaml.safe_load_all(text) if d]
+assert len(docs) == 0, f"file should be all-comments, got {len(docs)} valid docs"
+
+# 2. All three template sections are present.
+n_templates = text.count('# --- Template')
+assert n_templates == 3, f"expected 3 template sections, got {n_templates}"
+
+# 3. The three modes are referenced.
+assert 'mode: monitor' in text
+assert 'mode: block' in text
+assert 'enable: false' in text
+
+# 4. The opt-out block (template 3) actually disables the plugin. (The
+#    mode: block and mode: monitor blocks have enable: true.)
+#    Counted by scanning for "enable: true" (should be 2) and "enable: false" (should be 1).
+assert text.count('enable: true') == 2, f"expected 2 'enable: true', got {text.count('enable: true')}"
+assert text.count('enable: false') == 1, f"expected 1 'enable: false', got {text.count('enable: false')}"
+
 print("OK")
 PY
 ```
