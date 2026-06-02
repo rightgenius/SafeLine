@@ -34,6 +34,10 @@ on:
 
 env:
   IMAGE_NAME: safeline-t1k-controller
+  # Mirror secrets into env so they can be referenced in `if:` (GitHub blocks
+  # `secrets.*` in if-expressions for security; env works).
+  ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+  ALIYUN_NAMESPACE: ${{ secrets.ALIYUN_NAMESPACE }}
 
 jobs:
   build:
@@ -64,7 +68,7 @@ jobs:
           echo "upstream_tag=$UPSTREAM_TAG, image_tag=$IMAGE_TAG"
 
       - name: Login to Aliyun ACR
-        if: ${{ secrets.ALIYUN_REGISTRY != '' }}
+        if: ${{ env.ALIYUN_REGISTRY != '' }}
         uses: docker/login-action@v3
         with:
           registry: ${{ secrets.ALIYUN_REGISTRY }}
@@ -86,10 +90,10 @@ jobs:
           context: ./k8s/t1k-controller
           file: ./k8s/t1k-controller/Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: ${{ secrets.ALIYUN_REGISTRY != '' }}
+          push: ${{ env.ALIYUN_REGISTRY != '' }}
           tags: |
-            ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.image }}
-            ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.upstream }}
+            ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.image }}
+            ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.upstream }}
           build-args: |
             UPSTREAM_TAG=${{ steps.tags.outputs.upstream }}
             LUAROCKS_SERVER=https://luarocks.cn
@@ -101,7 +105,7 @@ jobs:
       - name: Smoke test the built image
         if: ${{ steps.build.outputs.digest != '' }}
         run: |
-          IMAGE="${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.image }}"
+          IMAGE="${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.image }}"
           echo "Testing $IMAGE"
           # 1) nginx config parses
           docker run --rm --entrypoint nginx "$IMAGE" -t 2>&1 | grep -q "syntax is ok" \
