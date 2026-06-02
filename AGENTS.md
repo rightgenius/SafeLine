@@ -13,10 +13,13 @@ Notes to keep OpenCode sessions out of trouble in the SafeLine repo. SafeLine is
 | `mcp_server` | Go 1.24 | Model Context Protocol server that calls the SafeLine REST API (own `go.mod`, Dockerfile, docker-compose). |
 | `sdk/lua-resty-t1k` | Lua | OpenResty plugin speaking the T1K protocol to the detector. |
 | `sdk/kong` | Lua | Kong plugin (rockspecs). |
-| `sdk/ingress-nginx` | Lua | ingress-nginx plugin. |
+| `sdk/ingress-nginx` | Lua | ingress-nginx plugin — **DEPRECATED**, see "Data plane migration" below. |
 | `sdk/traefik-safeline` | (submodule) | Traefik plugin. |
 | `blazehttp` | (submodule) | HTTP parser used by the detector. |
 | `yanshi` | C++ | Ragel-like FSA generator with `flex`/`bison` frontend. |
+| `k8s/README.md` | Markdown | Top-level entry point for k8s deployment docs (control-plane manifests, deprecated ingress-nginx section now points at `k8s/apisix-controller/`). |
+| `k8s/t1k-controller` | Bash + Dockerfile | Legacy data plane: builds an `ingress-nginx` controller image with the t1k plugin pre-installed. **DEPRECATED** — use `k8s/apisix-controller/` for new work. |
+| `k8s/apisix-controller` | YAML + Markdown | New data plane: helm values for APISIX + `apisix-ingress-controller`, `ApisixPlugin` CRD templates, demo app, migration guide. Uses the official first-party `chaitin-waf` plugin in the APISIX plugin hub. See "Data plane migration" below. |
 | `version.json` | JSON | `latest_version`, `rec_version`, `lts_version`. Keep this in sync when cutting releases. |
 
 ## Submodules
@@ -102,7 +105,7 @@ client → safeline-tengine (host network, :80/:443) ─┬─→ safeline-detec
                                                                           ├──→ safeline-fvm (bytecode)
                                                                           └──→ safeline-luigi (background)
 
-External integrators: kong / ingress-nginx / openresty (lua-resty-t1k) ──→ safeline-detector via T1K (unix sock or TCP/8000)
+External integrators: kong / openresty (lua-resty-t1k) / apisix (chaitin-waf) ──→ safeline-detector via T1K (unix sock or TCP/8000)
                                                                                        or
 AI agents: mcp_server (5678) ──HTTPS+token──→ mgt-api REST :1443
 ```
@@ -128,8 +131,26 @@ AI agents: mcp_server (5678) ──HTTPS+token──→ mgt-api REST :1443
 - Don't commit changes under `submodule/` (gitignored in `management/`) or generated `*.pb.go`. The build chain regenerates them.
 - `yanshi`'s `lexer.{cc,hh}` and `parser.{cc,hh}` are gitignored; don't commit them after `make`. If they appear in a working tree, run `make distclean`.
 - The mgt-api container listens on `1443` inside the compose network; the host port is `${MGT_PORT:-9443}`. The Tengine container uses `network_mode: host`, not the `safeline-ce` bridge — don't move it onto the bridge network.
-- The detector defaults to a unix socket (`/resources/detector/snserver.sock`). The Lua/ingress-nginx plugins document how to switch the detector to TCP/8000 (edit `detector.yml` and expose the port) before they can talk to it.
+- The detector defaults to a unix socket (`/resources/detector/snserver.sock`). The Lua plugins document how to switch the detector to TCP/8000 (edit `detector.yml` and expose the port) before they can talk to it.
 - License is `LICENSE.md` (custom, not stock MIT/Apache). Keep copyright headers consistent.
 - `.github/ISSUE_TEMPLATE/config.yml` disables blank issues and links to the Discord and the CT Stack bypass reporting form. New issues must use one of the templates in `.github/ISSUE_TEMPLATE/`.
+
+## Data plane migration: ingress-nginx → APISIX
+
+`ingress-nginx` was officially retired by Kubernetes SIG Network and the Security Response Committee on 2025-11-11 (https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/). Best-effort maintenance ended **March 2026**; after that there are no security patches.
+
+Consequences in this repo:
+
+- `sdk/ingress-nginx/` and the rockspec there are **frozen at last-published version**. Don't ship new features against them; don't update the rockspec for new ingress-nginx releases.
+- `k8s/t1k-controller/` (build.sh, Dockerfile, GHA workflow) targets ingress-nginx as the base image. **It still builds and runs** (pin to `v1.15.0`, NOT `controller-v1.15.1` — the registry uses plain `vX.Y.Z` tags and has no `latest`), but treat the whole subtree as transitional.
+- The `docker.io/chaitin/ingress-nginx-controller` image is also based on ingress-nginx and is on the same deprecation clock.
+
+**Target data plane: APISIX** (https://apisix.apache.org/). It's actively maintained, built on OpenResty (so `lua-resty-t1k` can be reused as the underlying T1K client), has its own k8s ingress controller (`apisix-ingress-controller`), and is what new integrations in this repo should target.
+
+What that means for new work:
+- Don't add features to `sdk/ingress-nginx/`.
+- `k8s/apisix-controller/` is the new home for k8s data-plane work. It uses the **official first-party `chaitin-waf` plugin** from the APISIX plugin hub (https://apisix.apache.org/docs/apisix/plugins/chaitin-waf/) — no custom controller image and no custom Lua plugin build needed. Wires up via the `apisix` and `apisix-ingress-controller` Helm charts; WAF plugin metadata (node list, cluster-wide defaults) is set via `plugin_attr` in chart values, and per-Ingress opt-in is via the `ApisixPlugin` CRD. The design rationale is in `docs/superpowers/specs/2026-06-02-safeline-k8s-apisix-design.md`.
+- `sdk/lua-resty-t1k/` is the long-term portable core. Any data plane that supports OpenResty/Lua (APISIX, Kong, OpenResty sidecar) can consume it. APISIX's `chaitin-waf` plugin uses it under the hood.
+- `sdk/kong/` and `sdk/traefik-safeline/` are still maintained upstream — keep them as alternatives; don't deprecate them.
 </content>
 </invoke>
