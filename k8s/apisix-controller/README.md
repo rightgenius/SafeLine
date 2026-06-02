@@ -21,6 +21,7 @@ helm repo add apisix https://apache.github.io/apisix-helm-chart
 helm repo update
 helm install apisix apisix/apisix \
   --namespace ingress-apisix --create-namespace \
+  --version 0.16.0 \
   -f k8s/apisix-controller/helm-values.yaml
 
 # 2. Wait for pods to be Ready.
@@ -37,8 +38,11 @@ curl -i "http://demo.example.com/"            # expect 200 OK
 curl -i "http://demo.example.com/?id=1' OR '1'='1"   # expect 403 + JSON body
 
 # 5. Attach WAF to your real Ingress(es).
-#    Pick a template from k8s/apisix-controller/waf-plugin.yaml,
-#    edit ingressRefs and the namespace, then:
+#    Copy a template, edit it, and apply:
+cp k8s/apisix-controller/waf-plugin.yaml waf-my-app.yaml
+#    Edit waf-my-app.yaml: uncomment the block you want (monitor / block
+#    / off), and update the three marked lines: `metadata.name`,
+#    `metadata.namespace`, and `spec.ingressRefs[0].name`.
 kubectl apply -f waf-my-app.yaml
 ```
 
