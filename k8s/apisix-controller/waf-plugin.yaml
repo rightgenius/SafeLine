@@ -1,0 +1,71 @@
+# ApisixPlugin templates for the chaitin-waf plugin.
+#
+# How to use:
+#   1. Pick the block that matches the desired mode (monitor / block / off).
+#   2. Copy it into your app's namespace, into a file of your choice.
+#   3. Edit `metadata.name` to be unique within the namespace, and edit
+#      `spec.ingressRefs[].name` / `spec.ingressRefs[].namespace` to point
+#      at your Ingress.
+#   4. kubectl apply -f that file.
+#
+# `mode: off` is the "skip WAF for this Ingress" escape hatch, replacing
+# ingress-nginx's `safeline.nginx.org/disable: "true"` annotation.
+#
+# NOTE: per-Ingress plugin config overrides the cluster-wide defaults set
+# in k8s/apisix-controller/helm-values.yaml. If `mode` is omitted here, the
+# cluster default (set in helm-values.yaml) applies.
+
+# --- Template 1: monitor mode (log attacks, do not block) ---
+# Use this for canaries and newly added Ingresses.
+# apiVersion: apisix.apache.org/v1alpha1
+# kind: ApisixPlugin
+# metadata:
+#   name: waf-monitor
+#   namespace: my-app            # <-- change
+# spec:
+#   ingressRefs:
+#     - name: my-app-ingress
+#       namespace: my-app        # <-- change
+#   plugins:
+#     - name: chaitin-waf
+#       enable: true
+#       config:
+#         mode: monitor
+#         append_waf_resp_header: true
+#         append_waf_debug_header: true   # off in production
+#
+# --- Template 2: block mode (active enforcement) ---
+# Use this for production Ingresses that have been clean in monitor mode
+# for >= 48 hours.
+# apiVersion: apisix.apache.org/v1alpha1
+# kind: ApisixPlugin
+# metadata:
+#   name: waf-block
+#   namespace: my-app
+# spec:
+#   ingressRefs:
+#     - name: my-app-ingress
+#       namespace: my-app
+#   plugins:
+#     - name: chaitin-waf
+#       enable: true
+#       config:
+#         mode: block
+#         append_waf_resp_header: true
+#         append_waf_debug_header: false
+#
+# --- Template 3: opt-out (WAF disabled for this Ingress) ---
+# Use sparingly. Common reasons: an upstream serves binary traffic that
+# confuses the detector, or a route is internal-only with no untrusted input.
+# apiVersion: apisix.apache.org/v1alpha1
+# kind: ApisixPlugin
+# metadata:
+#   name: waf-off
+#   namespace: my-app
+# spec:
+#   ingressRefs:
+#     - name: my-app-ingress
+#       namespace: my-app
+#   plugins:
+#     - name: chaitin-waf
+#       enable: false
