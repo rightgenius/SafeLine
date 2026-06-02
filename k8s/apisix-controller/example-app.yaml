@@ -1,0 +1,111 @@
+# Minimal "app" used to verify the WAF is wired up correctly.
+# Real deployments replace these objects with your own app; the
+# application code itself needs no changes.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-app
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo-app-html
+  namespace: demo-app
+data:
+  index.html: |
+    <!doctype html>
+    <title>demo</title>
+    <h1>OK</h1>
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-app
+  namespace: demo-app
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: demo-app } }
+  template:
+    metadata: { labels: { app: demo-app } }
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.27-alpine
+        ports: [{ containerPort: 80 }]
+        volumeMounts:
+        - { name: html, mountPath: /usr/share/nginx/html }
+        - { name: conf, mountPath: /etc/nginx/conf.d/default.conf, subPath: default.conf }
+        resources:
+          requests: { cpu: 50m, memory: 32Mi }
+      volumes:
+      - name: html
+        configMap: { name: demo-app-html }
+      - name: conf
+        configMap: { name: demo-app-nginx-conf }
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo-app-nginx-conf
+  namespace: demo-app
+data:
+  default.conf: |
+    server {
+        listen 80;
+        location / { root /usr/share/nginx/html; }
+    }
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-app
+  namespace: demo-app
+spec:
+  selector: { app: demo-app }
+  ports: [{ port: 80, targetPort: 80 }]
+
+---
+# Plain Ingress — apisix-ingress-controller will translate it into an
+# APISIX route automatically (the controller watches Ingress resources).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: demo-app
+  namespace: demo-app
+spec:
+  ingressClassName: apisix     # <-- apisix-ingress-controller's class
+  rules:
+  - host: demo.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: demo-app
+            port: { number: 80 }
+
+---
+# Per-Ingress WAF opt-in. To switch modes, edit `mode` and `kubectl apply`.
+# To disable WAF for this Ingress, set `enable: false` on the plugin.
+apiVersion: apisix.apache.org/v1alpha1
+kind: ApisixPlugin
+metadata:
+  name: waf-demo
+  namespace: demo-app
+spec:
+  ingressRefs:
+    - name: demo-app
+      namespace: demo-app
+  plugins:
+    - name: chaitin-waf
+      enable: true
+      config:
+        mode: monitor
+        append_waf_resp_header: true
+        append_waf_debug_header: true
