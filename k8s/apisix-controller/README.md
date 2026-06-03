@@ -8,7 +8,7 @@
 
 **是什么**：在 k8s 上把 SafeLine CE 跑起来，并把 **Apache APISIX** 作为对外网关（数据面），让所有外部 HTTP 流量在到达你的业务 Pod 之前先过 WAF 检测。APISIX 通过官方插件中心的 `chaitin-waf` 插件和 SafeLine 检测引擎通信，整个过程不需要你写一行 Lua，不需要自己编译 controller 镜像。
 
-**不是什么**：不是 control plane（控制面）的部署说明。控制面就是 SafeLine 自己那一坨服务（detector / mgt / pg / fvm / luigi / chaos / mcp），它们的部署 yaml 在 `k8s/README.md` 的第 3–8 节，**本文档不重复**——本文档假设控制面已经按那里跑起来了，只专注于**在控制面之上加一层 APISIX 数据面**。如果控制面还没装，请先去 `k8s/README.md` 看完前面 8 节。
+**不是什么**：不是 control plane（控制面）的部署说明。控制面就是 SafeLine 自己那一坨服务（detector / mgt / pg / fvm / luigi / chaos / mcp），它们的部署文档在 [`k8s/README.md`](../README.md)，实际 yaml 在 `k8s/apisix-controller/tier3-test/` 目录里，**本文档不重复**——本文档假设控制面已经按那里跑起来了，只专注于**在控制面之上加一层 APISIX 数据面**。如果控制面还没装，请先看 `k8s/README.md` §3。
 
 **和 `tier3-test/` 的关系**：`tier3-test/` 是我们在 OrbStack 1 节点 k8s 集群上跑过一遍的真实清单（参考用、不是产品级推荐），里面有些 hack 是为了绕过 arm64 qemu 模拟的限制。生产部署请用本文档的步骤，不要照抄 `tier3-test/`。本文档最后一节会逐一指出 `tier3-test/` 里哪些 hack 是为什么、哪些生产不需要。
 
@@ -81,7 +81,7 @@
 
 | Namespace | 放什么 | 数量 | 备注 |
 | --- | --- | --- | --- |
-| `safeline-ce` | 全部 SafeLine 控制面（pg、detector、mgt、fvm、luigi、chaos、mcp） | 7 个 Service | yaml 来自 `k8s/README.md` 第 3–8 节 |
+| `safeline-ce` | 全部 SafeLine 控制面（pg、detector、mgt、fvm、luigi、chaos、mcp） | 7 个 Service | 部署说明见 [`k8s/README.md`](../README.md)，yaml 在 `k8s/apisix-controller/tier3-test/` |
 | `ingress-apisix` | APISIX gateway + apisix-etcd + apisix-ingress-controller | 3 个组件 | 由 helm 装在同一个 namespace |
 | 你的业务 ns | 你的应用 + 你的 Ingress + 你的 ApisixPlugin | 任意 | 一个业务一个 ns 是惯例 |
 
@@ -141,7 +141,7 @@
 | k8s 集群 | 1.24+（任意发行版） | `kubectl version` |
 | helm | 3.x | `helm version` |
 | kubectl | 跟集群 API server 版本匹配 | `kubectl version --client` |
-| 一个能跑通的控制面 | 已经按 `k8s/README.md` 第 3–8 节装好 | `kubectl -n safeline-ce get pods` 全部 Ready |
+| 一个能跑通的控制面 | 已经按 [`k8s/README.md`](../README.md) §3 装好 | `kubectl -n safeline-ce get pods` 全部 Ready |
 | detector 在 TCP 模式下运行 | 监听 `0.0.0.0:8000` | `kubectl -n safeline-ce get svc safeline-detector -o jsonpath='{.spec.ports}'` |
 | 集群有 LoadBalancer | 云厂商自动分配；本地可用 MetalLB | `kubectl get svc -A` 看 External-IP 列 |
 
@@ -413,7 +413,7 @@ curl -i -H "Host: demo.example.com" \
 
 | README 步骤 | tier3-test 文件 | 一致性 / 偏离原因 |
 | --- | --- | --- |
-| §4.1 控制面 ready | `00-namespace.yaml` + `01-secrets-config.yaml` + `10-pg.yaml` + `20-detector.yaml` + `30-mgt.yaml` + `40-fvm-luigi-chaos.yaml` + `41-luigi.yaml` | **生产用 `k8s/README.md` 第 3–8 节的 yaml 即可**；tier3-test 是为了 arm64 qemu 做了若干绕过。 |
+| §4.1 控制面 ready | `00-namespace.yaml` + `01-secrets-config.yaml` + `10-pg.yaml` + `20-detector.yaml` + `30-mgt.yaml` + `40-fvm-luigi-chaos.yaml` + `41-luigi.yaml` | **生产用 tier3-test 同样的 yaml 即可**（amd64 节点无需 §7.1 列出的 qemu 绕过）。详细部署步骤见 [`k8s/README.md`](../README.md) §3。 |
 | §4.2.2 helm install apisix | `helm install apisix apisix/apisix --version 2.14.1 -f helm-values.yaml` | **一致**。tier3-test README 里的命令和本 README 一样。 |
 | §4.2.3 helm install ingress controller | `helm install apisix-ingress-controller apisix/apisix-ingress-controller --version 1.2.0` | **一致**。 |
 | §4.2.4 PUT plugin_metadata | `tier3-test/README.md` 步骤 3 | **一致**（admin key 都是 chart 2.14.1 默认 `edd1c9f...`）。 |
@@ -539,7 +539,7 @@ chaitin-waf 插件是 APISIX 上游维护，跟 SafeLine 发版**解耦**——A
 ## 10. 相关文档
 
 - 设计文档：[`docs/superpowers/specs/2026-06-02-safeline-k8s-apisix-design.md`](../../docs/superpowers/specs/2026-06-02-safeline-k8s-apisix-design.md)
-- 控制面部署（必读前置）：[`k8s/README.md`](../README.md) 第 3–8 节
+- 控制面部署（必读前置）：[`k8s/README.md`](../README.md)
+- 控制面 yaml（产品级）：[`k8s/apisix-controller/tier3-test/`](tier3-test/)
 - 从 ingress-nginx 迁移的 playbook：[`k8s/apisix-controller/upgrade-from-ingress-nginx.md`](upgrade-from-ingress-nginx.md)
-- tier3 验证集（参考用，不是生产模板）：[`k8s/apisix-controller/tier3-test/`](tier3-test/)
 - 顶层仓库说明（[`AGENTS.md`](../../AGENTS.md)）的 "Data plane migration" 段

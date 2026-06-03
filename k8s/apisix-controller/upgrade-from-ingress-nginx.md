@@ -8,8 +8,10 @@ plugin, with zero downtime.
 
 - helm 3.x
 - kubectl
-- A SafeLine CE on k8s deployment already running (sections 3-8 of
-  k8s/README.md). The detector, mgt, pg, luigi, fvm, chaos pods must all be
+- A SafeLine CE on k8s deployment already running (the control-plane
+  manifests in `k8s/apisix-controller/tier3-test/` adapted to amd64 nodes;
+  see the main README §7 for what carries over as-is and what arm64-only
+  hacks to drop). The detector, mgt, pg, luigi, fvm, chaos pods must all be
   Ready.
 - A test DNS record you can repoint (e.g. `waf-canary.example.com`) to use as
   the canary.
@@ -124,9 +126,12 @@ helm uninstall ingress-nginx -n ingress-nginx
 kubectl delete ns ingress-nginx
 ```
 
-The `k8s/t1k-controller/` subtree and the `safeline-t1k-controller` image
-stay in the repo for users who have not yet migrated; the AGENTS.md
-"Data plane migration" section is the source of truth on this.
+The `sdk/ingress-nginx/` Lua plugin and the `safeline-t1k-controller`
+container image are still useful in the rare case someone runs an old
+ingress-nginx deployment that has not yet been migrated, but the upstream
+image receives no security patches and the `k8s/t1k-controller/` build
+harness has been removed. Treat any remaining ingress-nginx deployment as
+on-deck for migration.
 
 ## Gotchas
 

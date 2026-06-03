@@ -1,9 +1,11 @@
 # SafeLine CE on Kubernetes — APISIX data plane (design)
 
 **Date:** 2026-06-02
-**Status:** design (ready for review)
-**Replaces:** `k8s/README.md` section 9 ("ingress-nginx + t1k 插件")
-**Companion to:** `k8s/README.md` sections 3–8 (control plane: mgt, detector, pg, luigi, fvm, chaos, mcp — unchanged)
+**Status:** implemented (2026-06). The scaffolding and validation work
+described below is committed; see `k8s/apisix-controller/README.md` for
+the up-to-date operational quick-start and `k8s/apisix-controller/tier3-test/`
+for the working manifests (the only place the SafeLine control-plane yaml
+lives now — the old `k8s/README.md` has been removed).
 
 ## Why
 
@@ -23,9 +25,10 @@ official `apache/apisix` Docker image and the official Helm chart.
 Goals:
 - Replace ingress-nginx + custom `sdk/ingress-nginx` plugin with APISIX + built-in
   `chaitin-waf` plugin.
-- Reuse the existing `k8s/README.md` control-plane manifests (sections 3–8) verbatim.
-- End state: `k8s/apisix-controller/` directory parallel to `k8s/t1k-controller/`
-  with helm values, ApisixPlugin examples, demo app, and a short migration doc.
+- Reuse the existing SafeLine control-plane manifests (now living in
+  `k8s/apisix-controller/tier3-test/`) verbatim.
+- End state: a `k8s/apisix-controller/` directory with helm values,
+  ApisixPlugin examples, demo app, and a short migration doc.
 - Match the APISIX project's idiomatic patterns: ApisixPlugin CRD for per-route
   opt-in, helm chart values for cluster-wide plugin metadata.
 
@@ -67,7 +70,7 @@ Internet
 
 | Component | Kind | Replicas | Image / chart | Source |
 | --- | --- | --- | --- | --- |
-| `safeline-pg` | StatefulSet | 1 | `chaitin/safeline-postgres:15.2` | unchanged from `k8s/README.md` |
+| `safeline-pg` | StatefulSet | 1 | `chaitin/safeline-postgres:15.2` | unchanged |
 | `safeline-detect` | Deployment | 1 | `chaitin/safeline-detector:<ver>` | unchanged (TCP/8000 mode) |
 | `safeline-mgt` | Deployment | 1 | `chaitin/safeline-mgt:<ver>` | unchanged |
 | `safeline-fvm` | Deployment | 1 | `chaitin/safeline-fvm:<ver>` | unchanged |
@@ -150,29 +153,32 @@ broken WAF, so this section is intentionally explicit.
 6. Mgt console (port 1443, exposed separately) reads attack events from the
    detector's T1K log and renders them in the UI. MCP server is unchanged.
 
-## Repository changes
+## Repository changes (as actually shipped)
 
 ### New directory: `k8s/apisix-controller/`
 
-Parallel to `k8s/t1k-controller/`. Contents:
+Contents:
 
 | File | Purpose |
 | --- | --- |
-| `README.md` | Quick-start + design reference (this doc, condensed) |
+| `README.md` | Operational quick-start (this doc, condensed and updated) |
 | `helm-values.yaml` | Recommended values for the `apisix` and `apisix-ingress-controller` charts (carries the plugin metadata, including the WAF node list) |
 | `waf-plugin.yaml` | `ApisixPlugin` templates for `monitor` / `block` / `off` modes |
 | `example-app.yaml` | Demo `nginx` app + `Ingress` + `ApisixPlugin` to verify WAF |
-| `upgrade-from-ingress-nginx.md` | Step-by-step migration from `k8s/README.md` section 9 |
+| `waf-plugin-metadata.json` | Body for the `PUT /apisix/admin/plugin_metadata/chaitin-waf` call (chart's `pluginAttrs` is silently ignored by chaitin-waf, this is the real config) |
+| `upgrade-from-ingress-nginx.md` | Step-by-step migration from a running ingress-nginx + t1k setup |
+| `tier3-test/` | Working manifests for the full SafeLine stack on k8s (control plane + APISIX data plane), validated on arm64 OrbStack |
 
-### Modified: `k8s/README.md`
+### Removed
 
-- Section 9 ("ingress-nginx + t1k 插件") is replaced with a deprecation banner
-  pointing at `k8s/apisix-controller/README.md`. The original yaml examples are
-  preserved in a collapsible `<details>` block for users who still need them.
-- Sections 3–8 (control plane) are unchanged.
-- "不要做的事" list gains one new item: don't attach `chaitin-waf` to the mgt
-  Ingress.
-- Section 14 (compose vs k8s) table gets a new row: data plane = APISIX.
+- `k8s/t1k-controller/` — the build harness for the legacy `safeline-t1k-controller`
+  container image is gone. The `sdk/ingress-nginx/` rockspec stays in the tree
+  for the rare case someone still runs ingress-nginx; the upstream image
+  receives no security patches and the local build path is no longer wired.
+- `k8s/README.md` — the old top-level k8s deployment doc. The SafeLine
+  control-plane yaml that used to live in its §3–§8 has been consolidated into
+  `k8s/apisix-controller/tier3-test/` (production = amd64, drop the arm64
+  qemu hacks).
 
 ### Unchanged
 
@@ -263,8 +269,9 @@ ingress-nginx's `safeline.nginx.org/disable: "true"` annotation.
    log).
 4. Once clean for ≥48 hours, flip the canary to `mode: block` and migrate the
    rest of the Ingresses in batches.
-5. Remove the ingress-nginx helm release and the `k8s/t1k-controller/`
-   `safeline-t1k-controller` image.
+5. Remove the ingress-nginx helm release. The `k8s/t1k-controller/` build
+   harness and `safeline-t1k-controller` image have already been removed from
+   this repo; no further cleanup is needed there.
 
 `k8s/apisix-controller/upgrade-from-ingress-nginx.md` carries the full
 playbook, including the gotchas (controller duplication, dangling
@@ -303,15 +310,13 @@ annotations, default-backend conflicts).
   `apache/apisix-ingress-controller:1.10.0` at launch. Bump in step with
   `version.json` when cutting SafeLine releases.
 
-## Out of scope (carried from `k8s/README.md` section 13)
+## Out of scope
 
 - No `hostNetwork: true` on the data plane.
 - No unix-socket detector (cross-Pod doesn't work; use TCP/8000).
 - No multi-replica detector (SafeLine detector is single-instance by design).
 - No splitting mgt / detector / luigi / fvm / chaos across multiple namespaces.
 - No WAF plugin on the mgt Ingress.
-- No detaching the existing t1k controller image — it stays available for
-  users who haven't migrated yet; it's just no longer the recommended path.
 
 ## Risks
 

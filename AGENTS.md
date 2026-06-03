@@ -17,9 +17,7 @@ Notes to keep OpenCode sessions out of trouble in the SafeLine repo. SafeLine is
 | `sdk/traefik-safeline` | (submodule) | Traefik plugin. |
 | `blazehttp` | (submodule) | HTTP parser used by the detector. |
 | `yanshi` | C++ | Ragel-like FSA generator with `flex`/`bison` frontend. |
-| `k8s/README.md` | Markdown | Top-level entry point for k8s deployment docs (control-plane manifests, deprecated ingress-nginx section now points at `k8s/apisix-controller/`). |
-| `k8s/t1k-controller` | Bash + Dockerfile | Legacy data plane: builds an `ingress-nginx` controller image with the t1k plugin pre-installed. **DEPRECATED** — use `k8s/apisix-controller/` for new work. |
-| `k8s/apisix-controller` | YAML + Markdown | New data plane: helm values for APISIX + `apisix-ingress-controller`, `ApisixPlugin` CRD templates, demo app, migration guide. Uses the official first-party `chaitin-waf` plugin in the APISIX plugin hub. See "Data plane migration" below. |
+| `k8s/apisix-controller` | YAML + Markdown | The k8s data plane: helm values for APISIX + `apisix-ingress-controller`, `ApisixPlugin` CRD templates, demo app, migration guide. Uses the official first-party `chaitin-waf` plugin in the APISIX plugin hub. See "Data plane migration" below. |
 | `version.json` | JSON | `latest_version`, `rec_version`, `lts_version`. Keep this in sync when cutting releases. |
 
 ## Submodules
@@ -146,7 +144,6 @@ AI agents: mcp_server (5678) ──HTTPS+token──→ mgt-api REST :1443
 Consequences in this repo:
 
 - `sdk/ingress-nginx/` and the rockspec there are **frozen at last-published version**. Don't ship new features against them; don't update the rockspec for new ingress-nginx releases.
-- `k8s/t1k-controller/` (build.sh, Dockerfile, GHA workflow) targets ingress-nginx as the base image. **It still builds and runs** (pin to `v1.15.0`, NOT `controller-v1.15.1` — the registry uses plain `vX.Y.Z` tags and has no `latest`), but treat the whole subtree as transitional.
 - The `docker.io/chaitin/ingress-nginx-controller` image is also based on ingress-nginx and is on the same deprecation clock.
 
 **Target data plane: APISIX** (https://apisix.apache.org/). It's actively maintained, built on OpenResty (so `lua-resty-t1k` can be reused as the underlying T1K client), has its own k8s ingress controller (`apisix-ingress-controller`), and is what new integrations in this repo should target.

@@ -1,8 +1,13 @@
 # SafeLine CE k8s — APISIX Data Plane Implementation Plan
 
+> **Status: completed (2026-06-03).** All 7 tasks in this plan were executed; the
+> implementation commits are visible in `git log`. This document is preserved as
+> a historical record of the work and is no longer a current task list. For
+> up-to-date operational docs see `k8s/README.md` and `k8s/apisix-controller/README.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add `k8s/apisix-controller/` (helm values, ApisixPlugin templates, demo app, migration doc, README) and deprecate `k8s/README.md` section 9 to point at the new directory.
+**Goal (achieved):** Add `k8s/apisix-controller/` (helm values, ApisixPlugin templates, demo app, migration doc, README), deprecate the ingress-nginx + t1k data plane, and consolidate the SafeLine k8s deployment story under a single new `k8s/README.md` covering the control plane plus a link to the new data plane.
 
 **Architecture:** Pure docs / manifests change. No Go, Lua, or other code. APISIX is installed via the official `apisix` and `apisix-ingress-controller` Helm charts; the WAF is the upstream `chaitin-waf` plugin with plugin metadata set via `plugin_attr` in chart values, and per-Ingress opt-in via the `ApisixPlugin` CRD.
 
@@ -12,16 +17,20 @@
 
 ---
 
-## File map
+## File map (final state, 2026-06)
 
 | Path | Status | Purpose |
 | --- | --- | --- |
-| `k8s/apisix-controller/README.md` | create | Quick-start + condensed design reference |
-| `k8s/apisix-controller/helm-values.yaml` | create | Helm values for `apisix` + `apisix-ingress-controller` (carries the WAF plugin metadata) |
-| `k8s/apisix-controller/waf-plugin.yaml` | create | `ApisixPlugin` templates for `monitor` / `block` / `off` |
-| `k8s/apisix-controller/example-app.yaml` | create | Demo `nginx` Deployment + Service + Ingress + `ApisixPlugin` |
-| `k8s/apisix-controller/upgrade-from-ingress-nginx.md` | create | Step-by-step migration from `k8s/README.md` section 9 |
-| `k8s/README.md` | modify | Replace section 9 with a deprecation banner; add one "don't" item; add one row to the section 14 table |
+| `k8s/apisix-controller/README.md` | created | Operational quick-start + condensed design reference |
+| `k8s/apisix-controller/helm-values.yaml` | created | Helm values for `apisix` + `apisix-ingress-controller` (carries the WAF plugin metadata) |
+| `k8s/apisix-controller/waf-plugin.yaml` | created | `ApisixPlugin` templates for `monitor` / `block` / `off` |
+| `k8s/apisix-controller/waf-plugin-metadata.json` | created | Body for the `PUT /apisix/admin/plugin_metadata/chaitin-waf` call (the real config — chart's `pluginAttrs` is silently ignored) |
+| `k8s/apisix-controller/example-app.yaml` | created | Demo `nginx` Deployment + Service + Ingress + `ApisixPlugin` |
+| `k8s/apisix-controller/upgrade-from-ingress-nginx.md` | created | Step-by-step migration from a running ingress-nginx + t1k setup |
+| `k8s/apisix-controller/tier3-test/` | created | Working manifests for the full SafeLine stack on k8s (control plane + APISIX data plane) |
+| `k8s/README.md` | rewritten | Top-level k8s deployment entry; control-plane manifests are now in `k8s/apisix-controller/tier3-test/`, data plane lives in `k8s/apisix-controller/` |
+| `k8s/t1k-controller/` | **deleted** | The legacy ingress-nginx data plane build harness is gone |
+| `sdk/ingress-nginx/` | frozen | Rockspec stays for the rare case someone still runs ingress-nginx; no further updates |
 
 ## Conventions used in every task
 
@@ -321,7 +330,8 @@ git commit -m "feat(k8s): apisix ApisixPlugin templates (monitor/block/off)"
 
 - [ ] **Step 1: Write the file**
 
-Mirror the structure of `k8s/t1k-controller/example-app.yaml` so existing users have a familiar shape.
+Mirror the structure of the old `k8s/t1k-controller/example-app.yaml` (now removed)
+so users migrating from ingress-nginx have a familiar shape.
 
 ```yaml
 # Minimal "app" used to verify the WAF is wired up correctly.
@@ -479,9 +489,10 @@ plugin, with zero downtime.
 
 - helm 3.x
 - kubectl
-- A SafeLine CE on k8s deployment already running (sections 3-8 of
-  k8s/README.md). The detector, mgt, pg, luigi, fvm, chaos pods must all be
-  Ready.
+- A SafeLine CE on k8s deployment already running (control-plane manifests
+  from the old `k8s/README.md` §3-§8, now consolidated in
+  `k8s/apisix-controller/tier3-test/`). The detector, mgt, pg, luigi, fvm,
+  chaos pods must all be Ready.
 - A test DNS record you can repoint (e.g. `waf-canary.example.com`) to use as
   the canary.
 
@@ -596,8 +607,9 @@ kubectl delete ns ingress-nginx
 ```
 
 The `k8s/t1k-controller/` subtree and the `safeline-t1k-controller` image
-stay in the repo for users who have not yet migrated; the AGENTS.md
-"Data plane migration" section is the source of truth on this.
+have been removed from the repo (2026-06). Users still running
+ingress-nginx should plan their migration; the AGENTS.md "Data plane
+migration" section is the source of truth.
 
 ## Gotchas
 
@@ -971,6 +983,16 @@ git commit -m "chore(k8s): remove .gitkeep placeholder from apisix-controller"
 ---
 
 ## Self-review checklist (run before declaring done)
+
+> **Historical snapshot.** The checklist below is the original from when this
+> plan was being executed (2026-06). Several of the concrete expectations
+> (e.g. "section 9", "section 13", "section 14", "9 commits total") no longer
+> match the post-completion state: `k8s/README.md` was later rewritten as a
+> top-level k8s entry point (not a section 9 patch), `k8s/t1k-controller/` was
+> removed entirely, and the implementation shipped in a different commit
+> shape. The "go look at git log" advice still holds. Preserve the checklist
+> as a record of what the author intended to verify, not as a current
+> correctness check.
 
 - [ ] All 5 files in `k8s/apisix-controller/` exist and parse as YAML (where applicable) / render as Markdown.
 - [ ] `k8s/README.md` section 9 has a deprecation banner pointing at `k8s/apisix-controller/README.md` and a `<details>` block preserving the original content.
