@@ -166,14 +166,148 @@ kubectl -n safeline-ce logs deploy/safeline-detector --tail 50
 - **不要把 detector Service 重命名**（§3.4 详述）。
 - **不要让 detector 监听 unix socket**。compose 默认是 socket；k8s 跨 Pod 不通，必须 TCP/8000（yaml 已经配好）。
 - **不要让 detector 多副本**。SafeLine detector 设计上就是单实例，`replicas > 1` 会导致两个 Pod 抢同一个 T1K 连接。`20-detector.yaml` 用 `strategy: Recreate` 强制每次只起一个。
-- **不要给 mgt 的 Ingress 挂 `chaitin-waf` 插件**。`k8s/apisix-controller/README.md` §6 故障排查专门写了这一条。
+- **不要给 mgt 的 Ingress 挂 `chaitin-waf` 插件**。详见下一节 §6。
 - **不要把控制面服务拆到多个 namespace**。Service 短名是硬编码的（§3.4）。
 
 ---
 
-## 6. 运维要点
+## 6. mgt 的访问（不挂 WAF）
 
-### 6.1 升级
+`safeline-mgt` 是**控制面**组件（管理 API + Web UI），不是被 WAF 保护的业务后端。它**绝对不能**走 APISIX + `chaitin-waf` 的入口。
+
+### 6.1 为什么 mgt 必须绕开 WAF
+
+| # | 原因 | 说明 |
+| --- | --- | --- |
+| 1 | **循环依赖** | chaitin-waf 用的规则是 mgt 推给 detector 的。mgt 自身也走 chaitin-waf → mgt 推规则的请求也被检测 → 推规则失败 → detector 永远没规则 → 启动死锁。 |
+| 2 | **流量内容混淆** | mgt 自身的入站流量来自管理员操作（编辑白名单、查看日志），白名单内容里常常包含 SQL 注入 / XSS 等"恶意特征"作为**字符串**。这些会被 detector 误判为攻击。 |
+| 3 | **锁死风险** | WAF 一旦误拦 mgt 的登录请求，**管理员进不去 mgt 改规则**。生产事故的常见原因。 |
+| 4 | **拓扑错位** | mgt 是"管理平面"（谁管理这套系统），数据面是"业务平面"（谁访问应用）。WAF 解决"公网上谁在攻击我的应用"，管理平面应该用"网络层访问控制"（防火墙 / VPN / IP 白名单），而不是 WAF 插件。 |
+
+### 6.2 三种访问方案
+
+按推荐程度从低到高排：
+
+#### 方案 A：`kubectl port-forward`（最简单，开发 / 堡垒机场景）
+
+适合单管理员本地访问，不对外暴露任何端口。
+
+```bash
+# 启在前台（Ctrl-C 中断）
+kubectl -n safeline-ce port-forward svc/safeline-mgt 1443:1443
+# 浏览器：https://localhost:1443
+# 默认证书是自签的，浏览器会警告；点 "Advanced" → "Proceed" 即可
+```
+
+> 默认用户是安装时设置的（compose 第一次启动会提示，k8s 部署则通过 `kubectl exec` 进 mgt Pod 跑 `mgt reset-user` 重置）。详见 `k8s/apisix-controller/README.md` §4.1 第一条注释里 mgt main.go 的 flag 列表。
+
+#### 方案 B：`NodePort`（推荐，单节点 / 内部网络生产）
+
+把 mgt Service 改成 `NodePort`，在集群节点上监听一个固定端口。配合网络层防火墙限制访问源 IP。
+
+```bash
+# 一次性 patch：把 mgt 改成 NodePort
+kubectl -n safeline-ce patch svc safeline-mgt --type='json' -p='[
+  {"op":"replace","path":"/spec/type","value":"NodePort"},
+  {"op":"add","path":"/spec/ports/0/nodePort","value":31443}
+]'
+
+# 验证
+kubectl -n safeline-ce get svc safeline-mgt
+# 期望: TYPE=NodePort, PORT(S)=1443:31443/TCP
+
+# 浏览器：https://<任一节点 IP>:31443
+```
+
+**生产必修**：用 NetworkPolicy / 云安全组 / 防火墙只允许运维 IP 段访问节点 31443。**不要**让 NodePort 直接暴露到公网。
+
+```yaml
+# 例：NetworkPolicy 限制只能从堡垒机 IP 访问
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: safeline-mgt-admin-only
+  namespace: safeline-ce
+spec:
+  podSelector:
+    matchLabels:
+      app: safeline-mgt
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - ipBlock:
+        cidr: 10.0.0.0/24    # 替换成你的堡垒机 / 办公网段
+        except:
+        - 10.0.0.1/32
+    ports:
+    - protocol: TCP
+      port: 1443
+```
+
+#### 方案 C：独立 Ingress（用别的 IngressController，跟 APISIX 数据面完全分开）
+
+集群里同时跑 APISIX（数据面）和**另一个** IngressController（管理面，比如 ingress-nginx / traefik / Kong）时，把 mgt 暴露在管理面的 Ingress 上，**永远不挂** chaitin-waf。
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: safeline-mgt
+  namespace: safeline-ce
+  # 注意：没有 ApisixPlugin；apiserver 也明确指定别的 ingressClassName
+spec:
+  ingressClassName: nginx    # ← 关键的"分开"声明；apiserver 走 apisix，mgt 走 nginx
+  rules:
+  - host: mgt.internal.example.com   # 内部域名，不解析到公网
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: safeline-mgt
+            port:
+              number: 1443
+  # 证书示例（如果 mgt 自己签证书就免了；浏览器会警告）
+  tls:
+  - hosts:
+    - mgt.internal.example.com
+    secretName: safeline-mgt-tls
+```
+
+`ingressClassName: nginx` 这条**至关重要**——它让 apisix-ingress-controller 不会去翻译这个 Ingress（因为它的 IngressClass 是 `apisix`），只有 nginx controller 才会处理。
+
+### 6.3 不要做的事（mgt 访问专项）
+
+- **不要**给 mgt 配 `ingressClassName: apisix`——即使不挂 ApisixPlugin，APISIX gateway 仍然会把流量代理过来，mgt 仍然在数据面网关上被管理。
+- **不要**给 mgt 配 `type: LoadBalancer` 后直接暴露到公网——公网攻击者可以暴力登录尝试（即使 mgt 自带限流，这也不该是常态）。
+- **不要**用 `kubectl port-forward` 做长期生产方案——port-forward 进程崩了 / 终端关了 mgt 就访问不到了；它的定位是"开发调试"。
+
+### 6.4 验证 mgt 访问
+
+任选一种方案后，验证流程：
+
+```bash
+# 1. 端口可达
+curl -kI https://localhost:1443/api/open/health    # port-forward 方案
+# 期望：HTTP/2 200，body 是 {"success":true, "data":...}
+
+# 2. 登录
+# 浏览器打开，按提示登录
+
+# 3. 推规则链路正常（mgt 启动后会向 detector :8001/update/policy 推）
+# 等 1-2 分钟后：
+kubectl -n safeline-ce logs deploy/safeline-detector --tail 30
+# 找包含 "policy" / "rules" / "online" 的日志行
+# 期望：detector 进入 online 状态（不再 "de-0 offline"）
+```
+
+---
+
+## 7. 运维要点
+
+### 7.1 升级
 
 ```bash
 # 改 yaml 里的镜像 tag（跟着 version.json 走），然后：
@@ -187,12 +321,12 @@ done
 kubectl apply -f k8s/apisix-controller/tier3-test/41-luigi.yaml
 ```
 
-### 6.2 备份
+### 7.2 备份
 
 - pg 是唯一有状态的服务，PVC 快照即可。SafeLine 的规则、用户、事件日志都存 pg。
 - detector 的规则是从 mgt 拉的，**不需要单独备份**——pg 没丢规则就还在。
 
-### 6.3 容量
+### 7.3 容量
 
 | 组件 | request | limit（mem） | 备注 |
 | --- | --- | --- | --- |
@@ -208,7 +342,7 @@ kubectl apply -f k8s/apisix-controller/tier3-test/41-luigi.yaml
 
 ---
 
-## 7. 后续步骤
+## 8. 后续步骤
 
 - **数据面**：[`k8s/apisix-controller/README.md`](apisix-controller/README.md) — helm install APISIX + PUT plugin_metadata + 部署示例应用
 - **从 ingress-nginx 迁移**：[`k8s/apisix-controller/upgrade-from-ingress-nginx.md`](apisix-controller/upgrade-from-ingress-nginx.md) — 已废弃但还有人跑 ingress-nginx 的零停机迁移路径

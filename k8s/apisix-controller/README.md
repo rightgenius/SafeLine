@@ -75,7 +75,7 @@
 **关键点：**
 - **APISIX 才是对外网关**，它和 detector 之间是**纯 TCP 内部通信**（T1K 协议在 8000 端口），所以 detector 不需要暴露到集群外。
 - **你的应用 Pod 不变**，只是上游多了一道 WAF 关卡。
-- **mgt API/UI 必须**走一个**不带** `chaitin-waf` 插件的独立 Ingress（或者直接 NodePort），否则管理员连自己的管理界面都进不去——这是最常踩的坑，详见 §6 故障排查。
+- **mgt API/UI 必须**走一个**不带** `chaitin-waf` 插件的独立 Ingress（或者直接 NodePort），否则管理员连自己的管理界面都进不去——这是最常踩的坑，详见 [`k8s/README.md` §6](../README.md#6-mgt-的访问不挂-waf)（为什么 + 三种方案 + 示例）。
 
 ### 1.2 命名空间划分
 
@@ -368,8 +368,8 @@ curl -i -H "Host: demo.example.com" \
 > - `?file=../../../etc/passwd` → 403
 
 **在 mgt UI 里能看到事件**：
-1. 把 mgt Service 用 NodePort 暴露：`kubectl -n safeline-ce patch svc safeline-mgt --type='json' -p='[{"op":"replace","path":"/spec/type","value":"NodePort"},{"op":"add","path":"/spec/ports/0/nodePort","value":31443}]'`
-2. 浏览器开 `https://<节点IP>:31443`，登录 mgt，**注意**这个端口走的链路是绕过 APISIX 的（直接到 mgt），所以不会触发 chaitin-waf。
+1. 暴露 mgt（绕开 WAF）：用 `kubectl port-forward`、NodePort、或独立 Ingress——任选一种。**为什么必须绕开 WAF、怎么绕、为什么不能用 `ingressClassName: apisix`** 详见 [`k8s/README.md` §6](../README.md#6-mgt-的访问不挂-waf)。
+2. 浏览器开 mgt 的 URL，登录，**注意**这个端口走的链路是绕过 APISIX 的（直接到 mgt），所以不会触发 chaitin-waf。
 3. 进 "Attack Logs" 应该能看到刚才被 403 的那条记录，`src_ip` 是你**真实的客户端 IP**（不是 LB 的 IP）——这就证明 `real_client_ip: true` 配置生效了。
 
 ---
@@ -401,7 +401,7 @@ curl -i -H "Host: demo.example.com" \
 | 所有请求 `X-APISIX-CHAITIN-WAF: no` | 插件根本没在 route 上挂 | 检查 ApisixPlugin 的 `spec.ingressRefs[].name` 是不是写错了；`kubectl -n <ns> get apisixplugin -o yaml` 看 status |
 | 所有请求 `X-APISIX-CHAITIN-WAF: err` + HTTP 500 | plugin_metadata 没写进 etcd（**最常见的坑**） | 重新跑 §4.2.4 的 curl PUT |
 | 误拦截正常请求 | 业务流量被规则误命中 | 临时把 ApisixPlugin mode 改成 `monitor`；去 mgt UI 的策略编辑器加白名单；稳定后改回 `block` |
-| mgt UI 进不去 / 502 | mgt 的 Ingress 也被 chaitin-waf 挡了 | mgt 必须走**独立的 Ingress（无 ApisixPlugin）或 NodePort**，永远不要给 mgt 挂 chaitin-waf |
+| mgt UI 进不去 / 502 | mgt 的 Ingress 也被 chaitin-waf 挡了 | mgt 必须走**独立的 Ingress（无 ApisixPlugin）或 NodePort**——原因和三种方案（port-forward / NodePort / 独立 IngressClass）详见 [`k8s/README.md` §6](../README.md#6-mgt-的访问不挂-waf) |
 | mgt Attack Logs 里 `src_ip` 是 LB IP | `real_client_ip: true` 没生效或 LB 网段不在 `trusted_addresses` | 改 `helm-values.yaml`，`helm upgrade`；同时把 LB CIDR 加到 `apisix.trusted_addresses` |
 | APISIX Pod 起不来 / CrashLoopBackOff | etcd 还没起好就被 APISIX 连 | 等；或者降副本为 1 重试；新装一般 30 秒内恢复 |
 
@@ -531,7 +531,7 @@ chaitin-waf 插件是 APISIX 上游维护，跟 SafeLine 发版**解耦**——A
 - **APISIX admin API 必须不暴露到公网**。默认 `apisix-admin` Service 是 ClusterIP 9180，外部访问不到——**不要**手动改成 LoadBalancer 或 NodePort。
 - **APISIX admin key 是 chart 默认值 `edd1c9f034335f136f87ad84b625c8f1`**——生产必须改。在 `helm-values.yaml` 加 `apisix.admin.credentials.admin: <新 key>` 然后 `helm upgrade`。
 - **etcd `rootPassword` 在 chart 渲染后是明文**（不是 Secret 引用）——生产要么用外部 etcd，要么在 apply 前 grep 一下清单再决定要不要改。
-- **mgt UI 不要挂 chaitin-waf**——这是真生产事故。给 mgt 一个独立 IngressClass 或者直接 NodePort。
+- **mgt UI 不要挂 chaitin-waf**——这是真生产事故。给 mgt 一个独立 IngressClass（`ingressClassName: nginx` 之类）或者直接 NodePort / `kubectl port-forward`。原因和具体示例见 [`k8s/README.md` §6](../README.md#6-mgt-的访问不挂-waf)。
 - **不要在生产给 detector 用 unix socket**——k8s 跨 Pod 不通。
 
 ---
