@@ -1,0 +1,11 @@
+---
+# Tier 3 test: deploy the full SafeLine CE control plane on OrbStack k8s
+# (1-node, v1.33.9). All images pulled via HTTP-to-SOCKS5 proxy at
+# 127.0.0.1:17900 (OrbStack docker daemon proxy). Pinned at v9.3.6
+# because v9.2.7 (the version.json default) is no longer in docker hub.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: safeline-ce
+  labels:
+    app.kubernetes.io/part-of: safeline

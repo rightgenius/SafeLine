@@ -9,4 +9,4 @@ __pycache__
 .cursor
 .vscode
 # k8s deployment scripts we own (override the top-level build.sh ignore)
-!k8s/t1k-controller/build.sh
+!k8s/t1k-controller/build.shopencode.json

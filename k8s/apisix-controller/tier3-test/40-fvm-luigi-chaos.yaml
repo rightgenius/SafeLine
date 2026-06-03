@@ -1,0 +1,180 @@
+---
+# SafeLine FVM — FastVectorMachine, the rule engine. Listens on :9004
+# and is fetched by mgt-api for the latest rule bytecode. No config in
+# compose; k8s README has the same null-config deployment.
+apiVersion: v1
+kind: Service
+metadata:
+  name: safeline-fvm
+  namespace: safeline-ce
+spec:
+  selector:
+    app: safeline-fvm
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+    - name: grpc
+      port: 9004
+      targetPort: 9004
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: safeline-fvm
+  namespace: safeline-ce
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: safeline-fvm
+  template:
+    metadata:
+      labels:
+        app: safeline-fvm
+    spec:
+      containers:
+        - name: fvm
+          image: chaitin/safeline-fvm:9.3.6
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+              name: http
+            - containerPort: 9004
+              name: grpc
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+---
+# SafeLine luigi — background worker. Connects to mgt + pg.
+# Per compose.yaml, env is MGT_IP + LUIGI_PG. MGT_IP is the mgt hostname.
+apiVersion: v1
+kind: Deployment
+metadata:
+  name: safeline-luigi
+  namespace: safeline-ce
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: safeline-luigi
+  template:
+    metadata:
+      labels:
+        app: safeline-luigi
+    spec:
+      initContainers:
+        - name: wait-for-mgt
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - "until nc -z safeline-mgt 1443; do sleep 2; done"
+      containers:
+        - name: luigi
+          image: chaitin/safeline-luigi:9.3.6
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MGT_IP
+              value: safeline-mgt
+            - name: LUIGI_PG
+              value: postgres://safeline-ce:$(POSTGRES_PASSWORD)@safeline-pg/safeline-ce?sslmode=disable
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: safeline-mgt-secret
+                  key: POSTGRES_PASSWORD
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+# SafeLine chaos — bot challenge / captcha service. Reads DB_ADDR from
+# env (compose.yaml). The chaos pod needs to be reachable from the data
+# plane (APISIX) so its Service stays ClusterIP — APISIX talks to it
+# directly when a request triggers a challenge.
+apiVersion: v1
+kind: Service
+metadata:
+  name: safeline-chaos
+  namespace: safeline-ce
+spec:
+  selector:
+    app: safeline-chaos
+  ports:
+    - name: challenge
+      port: 8080
+      targetPort: 8080
+    - name: auth
+      port: 8088
+      targetPort: 8088
+    - name: chaos
+      port: 9000
+      targetPort: 9000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: safeline-chaos
+  namespace: safeline-ce
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: safeline-chaos
+  template:
+    metadata:
+      labels:
+        app: safeline-chaos
+    spec:
+      initContainers:
+        - name: wait-for-pg
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - "until nc -z safeline-pg 5432; do sleep 2; done"
+      containers:
+        - name: chaos
+          image: chaitin/safeline-chaos:9.3.6
+          imagePullPolicy: IfNotPresent
+          env:
+            # Same k8s env-var caveat: no $(...) expansion.
+            - name: DB_ADDR
+              value: postgres://safeline-ce:tier3-pg-test-password-99@safeline-pg/safeline-ce?sslmode=disable
+            - name: POSTGRES_PASSWORD
+              value: tier3-pg-test-password-99
+          ports:
+            - containerPort: 8080
+              name: challenge
+            - containerPort: 8088
+              name: auth
+            - containerPort: 9000
+              name: chaos
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: sock
+              mountPath: /app/sock
+            - name: chaos-data
+              mountPath: /app/chaos
+      volumes:
+        - name: sock
+          emptyDir: {}
+        - name: chaos-data
+          emptyDir: {}

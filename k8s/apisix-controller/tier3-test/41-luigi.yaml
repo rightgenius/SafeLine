@@ -1,0 +1,49 @@
+---
+# SafeLine luigi — background worker. Connects to mgt + pg.
+# Per compose.yaml, env is MGT_IP + LUIGI_PG. MGT_IP is the mgt hostname.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: safeline-luigi
+  namespace: safeline-ce
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: safeline-luigi
+  template:
+    metadata:
+      labels:
+        app: safeline-luigi
+    spec:
+      initContainers:
+        - name: wait-for-mgt
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - "until nc -z safeline-mgt 1443; do sleep 2; done"
+      containers:
+        - name: luigi
+          image: chaitin/safeline-luigi:9.3.6
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MGT_IP
+              value: safeline-mgt
+            # Same k8s env-var caveat as mgt: no $(...) expansion.
+            - name: LUIGI_PG
+              value: postgres://safeline-ce:tier3-pg-test-password-99@safeline-pg/safeline-ce?sslmode=disable
+            - name: POSTGRES_PASSWORD
+              value: tier3-pg-test-password-99
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+      volumes:
+        - name: data
+          emptyDir: {}

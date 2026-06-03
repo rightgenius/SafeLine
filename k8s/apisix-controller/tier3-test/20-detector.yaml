@@ -1,0 +1,126 @@
+---
+# SafeLine detector. In compose it listens on a unix socket; in k8s we
+# must run on TCP. The 01-secrets-config.yaml ConfigMap provides
+# detector.yml with bind_addr 0.0.0.0 + listen_port 8000.
+apiVersion: v1
+kind: Service
+metadata:
+  name: safeline-detector
+  namespace: safeline-ce
+spec:
+  selector:
+    app: safeline-detector
+  ports:
+    - name: t1k
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+    - name: ping
+      port: 8001
+      targetPort: 8001
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: safeline-detector
+  namespace: safeline-ce
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: safeline-detector
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: safeline-detector
+    spec:
+      # Two-step workaround for the chown-on-mount issue:
+      # 1. Use an init container to copy the ConfigMap into a writable
+      #    emptyDir at /resources/detector.
+      # 2. The detector's entrypoint does NOT then have a read-only mount
+      #    at /resources/detector, so its `chown -Rh detector` succeeds
+      #    and it proceeds to `exec koopa`.
+      initContainers:
+        - name: copy-config
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - "mkdir -p /resources/detector && cp /cfg/detector.yml /resources/detector/detector.yml && chown -R 999:999 /resources"
+          volumeMounts:
+            - name: cfg
+              mountPath: /cfg
+            - name: res
+              mountPath: /resources/detector
+      containers:
+        - name: detector
+          image: chaitin/safeline-detector:9.3.6
+          imagePullPolicy: IfNotPresent
+          # BYPASS koopa wrapper: koopa runs a 5-retry health check and
+          # self-terminates the process when "de-0 offline" (which means
+          # the detect engine hasn't received a config push from mgt).
+          # The mgt can't push from this k8s setup because the mgt's Go
+          # binary is amd64-emulated on this arm64 OrbStack node via
+          # qemu-user-static, and the qemu listener for port 8000
+          # isn't visible in the host network namespace (causing nginx
+          # upstream "connection refused"). We run the snserver binary
+          # directly, which is the actual T1K detection server.
+          # This script does the entrypoint's setup work minus koopa:
+          # 1. mkdir /detector/config
+          # 2. cp libfusion2.so into /detector/config
+          # 3. merge /detector/snserver.yml + /resources/detector/detector.yml
+          # 4. exec snserver
+          command: ["/bin/sh"]
+          args:
+            - -c
+            - |
+              set -e
+              mkdir -p /detector/config /logs/detector
+              cp -f /detector/libfusion2.so /detector/config/libfusion2.so
+              cp /detector/snserver.yml /detector/detector.yml
+              if [ -f /resources/detector/detector.yml ]; then
+                while IFS= read -r line; do
+                  if [ -n "$line" ] && ! echo "$line" | grep -q '^ *#'; then
+                    key=$(echo "$line" | awk '{print $1}')
+                    sed -i "/$key/d" /detector/detector.yml
+                    echo "$line" >> /detector/detector.yml
+                  fi
+                done < /resources/detector/detector.yml
+              fi
+              exec /detector/snserver -c /detector/detector.yml
+          ports:
+            - containerPort: 8000
+              name: t1k
+            - containerPort: 8001
+              name: ping
+          env:
+            - name: LOG_DIR
+              value: /logs/detector
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          volumeMounts:
+            - name: res
+              mountPath: /resources/detector
+            - name: logs
+              mountPath: /logs/detector
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              memory: 2Gi
+      volumes:
+        - name: cfg
+          configMap:
+            name: safeline-detector-config
+            items:
+              - key: detector.yml
+                path: detector.yml
+        - name: res
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
